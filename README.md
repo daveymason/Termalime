@@ -2,7 +2,7 @@
 
 Termalime is a Tauri-powered desktop cockpit that fuses a full terminal emulator with an AI chat console. It’s built for developers who constantly bounce between shell sessions and AI prompts—everything lives in a single split-pane workspace with a polished lime-dark aesthetic.
 
-![Termalime hero screenshot](./docs/hero.png)
+![Termalime logo](./app-logo.png)
 
 ## ✨ Features
 
