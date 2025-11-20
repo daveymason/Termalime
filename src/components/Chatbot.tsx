@@ -13,6 +13,7 @@ import {
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { PERSONA_DESCRIPTIONS, useSettings } from "../state/settings";
 
 type ChatRole = "user" | "assistant";
 
@@ -29,6 +30,11 @@ type OllamaChunkPayload = {
   content?: string;
   done: boolean;
   error?: string;
+};
+
+type TerminalContextPayload = {
+  session_id: string;
+  last_lines: string;
 };
 
 const createId = () => crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
@@ -60,7 +66,11 @@ const mergeStreamContent = (previous: string, incoming: string) => {
   return previous + incoming.slice(overlap);
 };
 
-const Chatbot = () => {
+interface ChatbotProps {
+  sessionId?: string | null;
+}
+
+const Chatbot = ({ sessionId }: ChatbotProps) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -73,6 +83,7 @@ const Chatbot = () => {
   const responseIdRef = useRef<string | null>(null);
   const responseBufferRef = useRef<string>("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const { settings } = useSettings();
 
   const handleCopyMessage = useCallback(async (message: ChatMessage) => {
     const text = message.content?.trim();
@@ -298,12 +309,46 @@ const Chatbot = () => {
     setIsStreaming(true);
     setChatError(null);
 
+    let terminalContext: string | null = null;
+    if (settings.includeTerminalContext && sessionId) {
+      try {
+        const context = await invoke<TerminalContextPayload>("get_terminal_context", {
+          session_id: sessionId,
+          max_lines: 250,
+        });
+        const trimmedContext = context.last_lines?.trim();
+        if (trimmedContext) {
+          terminalContext = trimmedContext;
+        }
+      } catch (error) {
+        console.warn("Unable to fetch terminal context", error);
+      }
+    }
+
+    const personaDescription = PERSONA_DESCRIPTIONS[settings.persona];
+    const personaPrompt = `Persona directive: Adopt the ${settings.persona} persona – ${personaDescription}`;
+    const systemPrompt = settings.systemPrompt?.trim();
+
+    const requestPayload: Record<string, unknown> = {
+      prompt: trimmed,
+      model,
+    };
+
+    if (systemPrompt) {
+      requestPayload.system_prompt = systemPrompt;
+    }
+
+    if (personaPrompt) {
+      requestPayload.persona_prompt = personaPrompt;
+    }
+
+    if (terminalContext) {
+      requestPayload.terminal_context = terminalContext;
+    }
+
     try {
       await invoke("ask_ollama", {
-        request: {
-          prompt: trimmed,
-          model,
-        },
+        request: requestPayload,
       });
       setOllamaOnline(true);
     } catch (error) {
@@ -328,7 +373,17 @@ const Chatbot = () => {
         ),
       );
     }
-  }, [checkingOllama, input, isStreaming, model, ollamaOnline, refreshHealth, refreshModels]);
+  }, [
+    checkingOllama,
+    input,
+    isStreaming,
+    model,
+    ollamaOnline,
+    refreshHealth,
+    refreshModels,
+    sessionId,
+    settings,
+  ]);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
