@@ -294,8 +294,6 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
       fitAddon.fit();
     }
 
-    term.writeln("Connecting to local shell…\r\n");
-
     const disposeData = term.onData((data) => {
       const preflightBusy = preflightStatusRef.current !== "hidden";
 
