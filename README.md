@@ -26,6 +26,24 @@ npm install
 npm run tauri dev
 ```
 
+### 🧩 Continuous integration (GitHub Actions)
+
+This repository includes a GitHub Actions workflow that builds the frontend and the Tauri app on Ubuntu.
+
+What it does:
+- Installs Node.js and Rust toolchain
+- Installs system packages required by Tauri (GTK, WebKit, pkg-config, OpenSSL headers)
+- Builds the Vite frontend (`npm run build`)
+- Runs the Tauri build (`npm run tauri build`) and uploads any artifacts under `src-tauri/target/release/bundle`
+
+If you want to reproduce the CI environment locally, follow the native deps step (example for Ubuntu) and then run:
+
+```bash
+npm ci
+npm run build
+npm run tauri build
+```
+
 > **Linux tip:** if GTK/WebKit headers aren’t detected, prefix dev/test commands with `PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:$PKG_CONFIG_PATH` (same for `cargo check`).
 
 ### Splash + icon tweaks
@@ -60,13 +78,17 @@ PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:$PKG_CO
 3. Install the `.deb` locally:
 
 ```bash
-sudo apt install ./src-tauri/target/release/bundle/deb/Termalime_0.1.0_amd64.deb
+sudo apt install ./src-tauri/target/release/bundle/deb/Termalime_0.2.0_amd64.deb
 ```
 
 Artifacts land under `src-tauri/target/release/bundle/`:
 
-- `deb/Termalime_0.1.0_amd64.deb` → install with `apt`
-- `appimage/Termalime_0.1.0_amd64.AppImage` → `chmod +x` then run directly
-- `rpm/Termalime-0.1.0-1.x86_64.rpm` → for Fedora/RHEL friends
+- `deb/Termalime_0.2.0_amd64.deb` → install with `apt`
+- `appimage/Termalime_0.2.0_amd64.AppImage` → `chmod +x` then run directly
+- `rpm/Termalime-0.2.0-1.x86_64.rpm` → for Fedora/RHEL friends
 
 Adjust `bundle.targets` or metadata inside `src-tauri/tauri.conf.json` if you only need specific formats or want to bump versions.
+
+V0.2 Releases - December 25
+- Introduces the preflight checker that checks potential malicious commands which are pasted in
+- Adds a settings menu for Bot tweaking and visual settings
