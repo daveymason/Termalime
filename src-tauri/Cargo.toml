@@ -1,6 +1,6 @@
 [package]
 name = "Termalime"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Terminal with an Ollama Co-Pilot"
 authors = ["Davey Mason"]
 edition = "2021"
@@ -11,7 +11,7 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "Termalime_lib"
+name = "termalime_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -29,4 +29,5 @@ uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 tokio = { version = "=1.40.0", features = ["macros", "rt-multi-thread", "sync"] }
 futures-util = "0.3"
+json5 = "0.4"
 
