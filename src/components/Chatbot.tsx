@@ -161,16 +161,18 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     }
   }, [model]);
 
-  const refreshHealth = useCallback(async () => {
+  const refreshHealth = useCallback(async (): Promise<boolean> => {
     setCheckingOllama(true);
     try {
       const healthy = await invoke<boolean>("check_ollama");
       setOllamaOnline(healthy);
       if (!healthy) {
         setChatError("Ollama isn't responding on localhost:11434.");
+        return false;
       } else {
         setChatError((prev) => (prev?.includes("Ollama") ? null : prev));
         await refreshModels();
+        return true;
       }
     } catch (error) {
       setOllamaOnline(false);
@@ -179,6 +181,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
           ? error
           : "Couldn't reach Ollama on localhost:11434.",
       );
+      return false;
     } finally {
       setCheckingOllama(false);
     }
@@ -240,8 +243,32 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     [],
   );
 
+  // Auto-retry connection on startup with exponential backoff
   useEffect(() => {
-    refreshHealth().catch((error) => console.error(error));
+    let cancelled = false;
+    let retryCount = 0;
+    const maxRetries = 5;
+    const baseDelay = 1000; // 1 second
+
+    const attemptConnection = async () => {
+      if (cancelled) return;
+      
+      const success = await refreshHealth();
+      
+      if (!success && !cancelled && retryCount < maxRetries) {
+        retryCount++;
+        const delay = baseDelay * Math.pow(1.5, retryCount - 1); // 1s, 1.5s, 2.25s, 3.4s, 5s
+        setTimeout(() => {
+          attemptConnection().catch((error) => console.error(error));
+        }, delay);
+      }
+    };
+
+    attemptConnection().catch((error) => console.error(error));
+
+    return () => {
+      cancelled = true;
+    };
   }, [refreshHealth]);
 
   useEffect(() => {

@@ -1153,6 +1153,7 @@ struct OllamaResponseChunk {
 
 #[derive(Deserialize)]
 struct OllamaMessage {
+    #[allow(dead_code)]
     role: String,
     content: String,
 }
