@@ -60,6 +60,7 @@ impl PtyRegistry {
 pub struct PtySession {
     pub id: String,
     master: Box<dyn MasterPty + Send>,
+    #[allow(dead_code)] // Kept alive to maintain the child process
     child: Box<dyn Child + Send>,
     writer: Box<dyn Write + Send>,
     reader: Option<Box<dyn Read + Send>>,

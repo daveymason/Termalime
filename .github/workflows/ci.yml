@@ -21,11 +21,7 @@ jobs:
           cache: 'npm'
 
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install system packages (GTK, WebKit, AppImage deps)
         run: |

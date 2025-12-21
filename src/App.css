@@ -682,6 +682,301 @@ body {
   border-color: rgba(45, 212, 191, 0.8);
 }
 
+/* Context Bar */
+.context-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(2, 8, 12, 0.85);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  min-height: 42px;
+  flex-shrink: 0;
+}
+
+.context-bar__section {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.context-bar__section--buttons {
+  gap: 0.35rem;
+}
+
+.context-bar__section--meta {
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.context-bar__section--path {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.context-bar__divider {
+  width: 1px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.12);
+  margin: 0 0.35rem;
+}
+
+.context-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.context-btn:hover {
+  background: rgba(45, 212, 191, 0.1);
+  border-color: rgba(45, 212, 191, 0.4);
+  transform: translateY(-1px);
+}
+
+.context-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: rgba(180, 230, 220, 0.85);
+  padding: 0.2rem 0;
+}
+
+.context-item svg {
+  color: rgba(45, 212, 191, 0.6);
+}
+
+.context-item--muted {
+  color: rgba(45, 212, 191, 0.7);
+}
+
+.context-path {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+
+.context-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 0.35rem;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.context-copy-btn:hover {
+  background: rgba(45, 212, 191, 0.15);
+  color: #5eead4;
+}
+
+/* Commands Panel */
+.commands-panel {
+  max-height: min(85vh, 640px);
+}
+
+.commands-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.commands-empty {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.9rem;
+  text-align: center;
+  padding: 1.5rem;
+}
+
+.command-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(4, 16, 24, 0.65);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.command-card:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.command-card--editing {
+  border-color: rgba(45, 212, 191, 0.5);
+  background: rgba(45, 212, 191, 0.05);
+}
+
+.command-card__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.command-card__name {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.command-card__code {
+  display: block;
+  margin: 0.3rem 0 0;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.82rem;
+  color: #5eead4;
+  background: rgba(5, 6, 10, 0.6);
+  padding: 0.3rem 0.5rem;
+  border-radius: 0.4rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.command-card__desc {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.command-card__actions {
+  display: flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.command-action {
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.7);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.command-action:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.command-action--run {
+  background: rgba(52, 211, 153, 0.15);
+  border-color: rgba(52, 211, 153, 0.3);
+  color: #34d399;
+}
+
+.command-action--run:hover {
+  background: rgba(52, 211, 153, 0.25);
+  color: #6ee7b7;
+}
+
+.command-action--danger:hover {
+  background: rgba(248, 113, 113, 0.15);
+  border-color: rgba(248, 113, 113, 0.3);
+  color: #f87171;
+}
+
+.command-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 1rem;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  background: rgba(45, 212, 191, 0.03);
+}
+
+.command-form__row input {
+  width: 100%;
+  background: rgba(3, 7, 10, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.command-form__row input:focus {
+  outline: 2px solid rgba(45, 212, 191, 0.5);
+  outline-offset: 2px;
+}
+
+.command-form__actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.command-form__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.55rem 1rem;
+  border-radius: 0.65rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.command-form__btn--save {
+  background: linear-gradient(135deg, #34d399, #10b981);
+  border: none;
+  color: #041018;
+}
+
+.command-form__btn--save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.command-form__btn--save:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.command-form__btn--cancel {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.command-form__btn--cancel:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #fff;
+}
+
 .settings-overlay {
   position: fixed;
   inset: 0;

@@ -3,7 +3,8 @@ import "./App.css";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import Chatbot from "./components/Chatbot";
 import Terminal from "./components/Terminal";
-import { SettingsButton, SettingsPanel } from "./components/SettingsPanel";
+import { SettingsPanel } from "./components/SettingsPanel";
+import ContextBar from "./components/ContextBar";
 import { useSettings } from "./state/settings";
 
 function App() {
@@ -49,7 +50,10 @@ function App() {
           )}
         </PanelGroup>
       </main>
-      <SettingsButton onClick={() => setSettingsOpen(true)} />
+      <ContextBar 
+        onSettingsClick={() => setSettingsOpen(true)} 
+        sessionId={terminalSessionId}
+      />
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );

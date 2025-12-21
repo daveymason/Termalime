@@ -319,10 +319,119 @@ async fn check_ollama() -> Result<bool, String> {
     let response = HTTP_CLIENT
         .get("http://127.0.0.1:11434/api/tags")
         .send()
-        .await
-        .map_err(|err| err.to_string())?;
+        .await;
 
-    Ok(response.status().is_success())
+    match response {
+        Ok(res) => Ok(res.status().is_success()),
+        Err(_) => Ok(false),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemContext {
+    hostname: Option<String>,
+    username: Option<String>,
+    local_ip: Option<String>,
+    git_branch: Option<String>,
+    cwd: Option<String>,
+    shell: Option<String>,
+    ollama_online: bool,
+}
+
+#[tauri::command]
+async fn get_system_context(_session_id: Option<String>) -> Result<SystemContext, String> {
+    use std::env;
+    use std::process::Command;
+
+    // Get hostname
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok());
+
+    // Get username
+    let username = env::var("USER")
+        .or_else(|_| env::var("USERNAME"))
+        .ok();
+
+    // Get shell
+    let shell = env::var("SHELL")
+        .ok()
+        .and_then(|s| s.split('/').last().map(String::from));
+
+    // Get current working directory
+    let cwd = env::current_dir()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from));
+
+    // Get git branch - try from the executable's directory first (likely the project)
+    let exe_dir = env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        // Go up from target/debug to project root
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+
+    let git_branch = exe_dir.as_ref()
+        .and_then(|dir| {
+            Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(dir)
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .or_else(|| {
+            // Fallback: try from cwd
+            cwd.as_ref().and_then(|dir| {
+                Command::new("git")
+                    .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                    .current_dir(dir)
+                    .stderr(std::process::Stdio::null())
+                    .output()
+                    .ok()
+                    .filter(|output| output.status.success())
+                    .and_then(|output| String::from_utf8(output.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
+        });
+
+    // Get local IP address
+    let local_ip = get_local_ip();
+
+    // Check if Ollama is online
+    let ollama_online = HTTP_CLIENT
+        .get("http://127.0.0.1:11434/api/tags")
+        .send()
+        .await
+        .map(|res| res.status().is_success())
+        .unwrap_or(false);
+
+    Ok(SystemContext {
+        hostname,
+        username,
+        local_ip,
+        git_branch,
+        cwd,
+        shell,
+        ollama_online,
+    })
+}
+
+fn get_local_ip() -> Option<String> {
+    use std::net::UdpSocket;
+    
+    // Create a UDP socket and "connect" to a public address
+    // This doesn't actually send data, just determines the local interface
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let local_addr = socket.local_addr().ok()?;
+    Some(local_addr.ip().to_string())
 }
 
 #[tauri::command]
@@ -1153,6 +1262,7 @@ struct OllamaResponseChunk {
 
 #[derive(Deserialize)]
 struct OllamaMessage {
+    #[allow(dead_code)]
     role: String,
     content: String,
 }
@@ -1190,6 +1300,7 @@ pub fn run() {
             check_ollama,
             list_ollama_models,
             get_terminal_context,
+            get_system_context,
             analyze_command
         ])
         .run(tauri::generate_context!())
