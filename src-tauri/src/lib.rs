@@ -27,11 +27,24 @@ static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
 
 type ReaderHandle = tauri::async_runtime::JoinHandle<()>;
 
-#[derive(Default)]
 struct AppState {
     readers: Arc<Mutex<HashMap<String, ReaderHandle>>>,
     terminal_snapshots: Arc<Mutex<HashMap<String, TerminalSnapshot>>>,
+    system_info: Mutex<sysinfo::System>,
 }
+
+impl Default for AppState {
+    fn default() -> Self {
+        let mut sys = sysinfo::System::new_all();
+        sys.refresh_all();
+        Self {
+            readers: Default::default(),
+            terminal_snapshots: Default::default(),
+            system_info: Mutex::new(sys),
+        }
+    }
+}
+
 
 #[derive(Default, Clone)]
 struct TerminalSnapshot {
@@ -337,10 +350,15 @@ struct SystemContext {
     cwd: Option<String>,
     shell: Option<String>,
     ollama_online: bool,
+    cpu_usage: Option<f32>,
+    memory_usage: Option<f32>,
 }
 
 #[tauri::command]
-async fn get_system_context(_session_id: Option<String>) -> Result<SystemContext, String> {
+async fn get_system_context(
+    state: State<'_, AppState>,
+    _session_id: Option<String>,
+) -> Result<SystemContext, String> {
     use std::env;
     use std::process::Command;
 
@@ -412,6 +430,25 @@ async fn get_system_context(_session_id: Option<String>) -> Result<SystemContext
         .map(|res| res.status().is_success())
         .unwrap_or(false);
 
+    // Get CPU and Memory usage
+    let (cpu_usage, memory_usage) = {
+        let mut sys = state.system_info.lock().await;
+        sys.refresh_cpu();
+        sys.refresh_memory();
+        
+        let cpu = sys.global_cpu_info().cpu_usage();
+        
+        let total_mem = sys.total_memory();
+        let used_mem = sys.used_memory();
+        let mem = if total_mem > 0 {
+            (used_mem as f64 / total_mem as f64 * 100.0) as f32
+        } else {
+            0.0
+        };
+        
+        (cpu, mem)
+    };
+
     Ok(SystemContext {
         hostname,
         username,
@@ -420,6 +457,8 @@ async fn get_system_context(_session_id: Option<String>) -> Result<SystemContext
         cwd,
         shell,
         ollama_online,
+        cpu_usage: Some(cpu_usage),
+        memory_usage: Some(memory_usage),
     })
 }
 

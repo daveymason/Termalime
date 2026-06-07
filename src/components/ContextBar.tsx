@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Copy,
+  Cpu,
   GitBranch,
+  MemoryStick,
   Monitor,
   Network,
   Settings2,
@@ -22,6 +24,8 @@ interface SystemContext {
   gitBranch: string | null;
   cwd: string | null;
   shell: string | null;
+  cpuUsage?: number;
+  memoryUsage?: number;
 }
 
 const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
@@ -104,6 +108,20 @@ const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
         <>
           <div className="context-bar__divider" />
           <div className="context-bar__section context-bar__section--path">
+            {context.cpuUsage !== undefined && (
+              <div className="context-item" title={`CPU Usage: ${context.cpuUsage.toFixed(1)}%`}>
+                <Cpu size={13} />
+                <span>{context.cpuUsage.toFixed(0)}%</span>
+              </div>
+            )}
+
+            {context.memoryUsage !== undefined && (
+              <div className="context-item" title={`Memory Usage: ${context.memoryUsage.toFixed(1)}%`}>
+                <MemoryStick size={13} />
+                <span>{context.memoryUsage.toFixed(0)}%</span>
+              </div>
+            )}
+
             <span className="context-path" title={context.cwd}>
               {context.cwd}
             </span>
