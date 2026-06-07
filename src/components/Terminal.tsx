@@ -317,6 +317,7 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
         return;
       }
       event.preventDefault();
+      event.stopPropagation();
       handlePastedCommand(chunk);
     };
 
