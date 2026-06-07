@@ -63,7 +63,7 @@ const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
           <Settings2 size={14} />
           <span>Settings</span>
         </button>
-        <CommandsButton />
+        <CommandsButton onRunCommand={(cmd) => window.dispatchEvent(new CustomEvent("termalime:run-command", { detail: cmd }))} />
       </div>
 
       <div className="context-bar__divider" />
@@ -104,10 +104,10 @@ const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
         )}
       </div>
 
-      {context.cwd && (
+      {(context.cpuUsage !== undefined || context.memoryUsage !== undefined) && (
         <>
           <div className="context-bar__divider" />
-          <div className="context-bar__section context-bar__section--path">
+          <div className="context-bar__section context-bar__section--sys">
             {context.cpuUsage !== undefined && (
               <div className="context-item" title={`CPU Usage: ${context.cpuUsage.toFixed(1)}%`}>
                 <Cpu size={13} />
@@ -121,19 +121,23 @@ const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
                 <span>{context.memoryUsage.toFixed(0)}%</span>
               </div>
             )}
-
-            <span className="context-path" title={context.cwd}>
-              {context.cwd}
-            </span>
-            <button
-              className="context-copy-btn"
-              title="Copy path"
-              onClick={() => navigator.clipboard.writeText(context.cwd!)}
-            >
-              <Copy size={12} />
-            </button>
           </div>
         </>
+      )}
+
+      {context.cwd && (
+        <div className="context-bar__section context-bar__section--path">
+          <span className="context-path" title={context.cwd}>
+            {context.cwd}
+          </span>
+          <button
+            className="context-copy-btn"
+            title="Copy path"
+            onClick={() => navigator.clipboard.writeText(context.cwd!)}
+          >
+            <Copy size={12} />
+          </button>
+        </div>
       )}
     </footer>
   );

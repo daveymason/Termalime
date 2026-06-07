@@ -123,6 +123,12 @@ impl PtySession {
     }
 }
 
+impl Drop for PtySession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
 /// High-level PTY size abstraction used by the frontend/backed bridge.
 #[derive(Debug, Clone, Copy)]
 pub struct PtySize {

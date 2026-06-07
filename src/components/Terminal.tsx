@@ -41,9 +41,7 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
-  const [sessionId, setSessionId] = useState<string>();
   const [status, setStatus] = useState<TerminalStatus>("connecting");
-  const [statusMessage, setStatusMessage] = useState("Spawning PTY…");
   const { settings } = useSettings();
   const commandBufferRef = useRef<string>("");
   const preflightEnabledRef = useRef(settings.preflightCheck);
@@ -274,6 +272,43 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
   );
 
   useEffect(() => {
+    const handleRunCommand = (event: Event) => {
+      const customEvent = event as CustomEvent<string>;
+      const command = customEvent.detail;
+      if (!command) {
+        return;
+      }
+
+      const normalized = command.replace(/\r/g, "\n");
+      const trimmed = normalized
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .join(" && ");
+
+      const forwardToPty = () => {
+        updateCommandBuffer(normalized + "\r");
+        sendToPty(normalized + "\r");
+      };
+
+      if (!settings.preflightCheck) {
+        forwardToPty();
+        return;
+      }
+
+      startPreflightCheck(trimmed, forwardToPty);
+    };
+
+    window.addEventListener("termalime:run-command", handleRunCommand);
+    return () => {
+      window.removeEventListener("termalime:run-command", handleRunCommand);
+    };
+  }, [sendToPty, startPreflightCheck, updateCommandBuffer, settings.preflightCheck]);
+
+  useEffect(() => {
+    let active = true;
+    let spawnedSessionId: string | null = null;
+
     const term = new XTerm({
       convertEol: true,
       cursorBlink: true,
@@ -286,8 +321,8 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
-  termRef.current = term;
-  fitAddonRef.current = fitAddon;
+    termRef.current = term;
+    fitAddonRef.current = fitAddon;
 
     if (containerRef.current) {
       term.open(containerRef.current);
@@ -331,35 +366,50 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
 
     const connect = async () => {
       setStatus("connecting");
-      setStatusMessage("Spawning PTY…");
       try {
-    const id = await invoke<string>("spawn_pty");
-  sessionIdRef.current = id;
-        setSessionId(id);
-    onSessionChange?.(id);
+        const id = await invoke<string>("spawn_pty");
+        if (!active) {
+          invoke("close_pty", { session_id: id }).catch((err) =>
+            console.error("Failed to close PTY session:", err)
+          );
+          return;
+        }
+        spawnedSessionId = id;
+        sessionIdRef.current = id;
+        onSessionChange?.(id);
         setStatus("ready");
-        setStatusMessage("Connected");
         fitAddon.fit();
         await sendResize();
       } catch (error) {
-        console.error(error);
-        setStatus("error");
-        setStatusMessage("Failed to start shell");
-        term.writeln(`\r\n[Error] ${String(error)}\r\n`);
+        if (active) {
+          console.error(error);
+          setStatus("error");
+          term.writeln(`\r\n[Error] ${String(error)}\r\n`);
+        }
       }
     };
 
-  connect().catch((error) => console.error(error));
+    connect().catch((error) => console.error(error));
 
     return () => {
-  disposeData.dispose();
-  containerEl?.removeEventListener("paste", handleDomPaste, true);
+      active = false;
+      disposeData.dispose();
+      containerEl?.removeEventListener("paste", handleDomPaste, true);
       observer.disconnect();
       if (resizeFrameRef.current) {
         cancelAnimationFrame(resizeFrameRef.current);
       }
       onSessionChange?.(null);
       term.dispose();
+      termRef.current = null;
+      fitAddonRef.current = null;
+      sessionIdRef.current = null;
+      
+      if (spawnedSessionId) {
+        invoke("close_pty", { session_id: spawnedSessionId }).catch((err) =>
+          console.error("Failed to close PTY session:", err)
+        );
+      }
     };
   }, [
     handlePreflightCancel,
@@ -372,27 +422,34 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
   ]);
 
   useEffect(() => {
-    if (!sessionId) {
-      return;
-    }
-
+    let active = true;
     let unlisten: UnlistenFn | undefined;
 
     const attach = async () => {
-      unlisten = await listen<TerminalOutputPayload>("terminal-output", (event) => {
+      const unsub = await listen<TerminalOutputPayload>("terminal-output", (event) => {
+        if (!active) {
+          return;
+        }
         if (event.payload.session_id !== sessionIdRef.current) {
           return;
         }
         termRef.current?.write(event.payload.data);
       });
+
+      if (!active) {
+        unsub();
+      } else {
+        unlisten = unsub;
+      }
     };
 
-  attach().catch((error) => console.error(error));
+    attach().catch((error) => console.error(error));
 
     return () => {
+      active = false;
       unlisten?.();
     };
-  }, [sessionId]);
+  }, []);
 
   useEffect(() => {
     if (!termRef.current) {
@@ -402,13 +459,6 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
     termRef.current.refresh(0, termRef.current.rows - 1);
     queueResize();
   }, [queueResize, settings.terminalFontSize]);
-
-  const statusTone =
-    status === "ready"
-      ? "status-dot--ready"
-      : status === "error"
-        ? "status-dot--error"
-        : "status-dot--warning";
 
   const preflightIndicatorTone =
     preflightState.status === "analyzing"
@@ -437,23 +487,16 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
 
   return (
     <section className="panel panel--terminal">
-      <header className="panel-header panel-header--stacked">
-        <div className="panel-heading panel-heading--stacked">
-          <div className="panel-heading__title-main">
-            <p className="panel-label">Terminal</p>
+      {settings.preflightCheck && (
+        <header className="panel-header panel-header--stacked" style={{ borderBottom: "none", paddingBottom: 0, justifyContent: "flex-end", flexDirection: "row" }}>
+          <div style={{ marginLeft: "auto" }}>
+            <div className={preflightIndicatorTone}>
+              {preflightIndicatorIcon}
+              <span>{preflightIndicatorLabel}</span>
+            </div>
           </div>
-          <div className="panel-subtitle panel-subtitle--status">
-            <span className={`status-dot ${statusTone}`} />
-            <span className="status-text">{statusMessage}</span>
-          </div>
-        </div>
-        {settings.preflightCheck && (
-          <div className={preflightIndicatorTone}>
-            {preflightIndicatorIcon}
-            <span>{preflightIndicatorLabel}</span>
-          </div>
-        )}
-      </header>
+        </header>
+      )}
       <div className="panel-content panel-content--terminal">
         <div ref={containerRef} className="terminal-host" />
         {status === "error" && (
