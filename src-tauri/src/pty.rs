@@ -79,6 +79,7 @@ impl PtySession {
             .context("failed to open PTY pair")?;
 
         let mut cmd = CommandBuilder::new(shell_cmd);
+        cmd.arg("-i");
         cmd.env("TERM", "xterm-256color");
 
         let child = pair
