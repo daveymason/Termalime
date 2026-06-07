@@ -89,6 +89,14 @@ Artifacts land under `src-tauri/target/release/bundle/`:
 
 Adjust `bundle.targets` or metadata inside `src-tauri/tauri.conf.json` if you only need specific formats or want to bump versions.
 
-V0.2 Releases - December 25
+V0.2 Releases - November 25
 - Introduces the preflight checker that checks potential malicious commands which are pasted in
 - Adds a settings menu for Bot tweaking and visual settings
+
+V0.3 Released - December 25
+- Adds the Context Bar
+- Adds a new command panel to CRUD commands
+- Brings in a new Auto-reconnect for Models which act strang upon start up (Ministral)
+- Minor bug fixes
+
+Plan v0.4.0: Windows / MacOSx support & more context info (CPU/memory). 
