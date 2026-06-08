@@ -380,6 +380,7 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
         setStatus("ready");
         fitAddon.fit();
         await sendResize();
+        term.focus();
       } catch (error) {
         if (active) {
           console.error(error);
