@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Termalime",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "identifier": "termaline",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -20,13 +20,23 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' asset: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc:;",
+      "dangerousDisableAssetCspModification": ["style-src"]
     }
   },
   "bundle": {
     "active": true,
+    "license": "MIT",
+    "category": "DeveloperTool",
+    "shortDescription": "A Terminal with an Ollama Co-Pilot",
+    "longDescription": "Termalime is a Tauri-powered desktop cockpit that fuses a full terminal emulator with an AI chat console. It is built for developers who constantly bounce between shell sessions and AI prompts—everything lives in a single split-pane workspace with a polished lime-dark aesthetic.",
     "targets": "all",
     "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
       "icons/icon.png"
     ]
   }

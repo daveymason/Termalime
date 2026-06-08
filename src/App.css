@@ -439,7 +439,7 @@ body {
   line-height: 1.6;
 }
 
-.chat-markdown p + p,
+.chat-markdown p+p,
 .chat-markdown ul,
 .chat-markdown ol {
   margin-top: 0.65rem;
@@ -633,6 +633,7 @@ body {
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }
@@ -642,9 +643,11 @@ body {
   0% {
     opacity: 0.25;
   }
+
   50% {
     opacity: 1;
   }
+
   100% {
     opacity: 0.25;
   }
@@ -794,6 +797,28 @@ body {
 /* Commands Panel */
 .commands-panel {
   max-height: min(85vh, 640px);
+}
+
+.commands-footer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.8rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.commands-footer-btn:hover {
+  background: rgba(45, 212, 191, 0.1);
+  border-color: rgba(45, 212, 191, 0.4);
+  color: #5eead4;
+  transform: translateY(-1px);
 }
 
 .commands-list {

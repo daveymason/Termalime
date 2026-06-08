@@ -27,11 +27,24 @@ static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
 
 type ReaderHandle = tauri::async_runtime::JoinHandle<()>;
 
-#[derive(Default)]
 struct AppState {
     readers: Arc<Mutex<HashMap<String, ReaderHandle>>>,
     terminal_snapshots: Arc<Mutex<HashMap<String, TerminalSnapshot>>>,
+    system_info: Mutex<sysinfo::System>,
 }
+
+impl Default for AppState {
+    fn default() -> Self {
+        let mut sys = sysinfo::System::new_all();
+        sys.refresh_all();
+        Self {
+            readers: Default::default(),
+            terminal_snapshots: Default::default(),
+            system_info: Mutex::new(sys),
+        }
+    }
+}
+
 
 #[derive(Default, Clone)]
 struct TerminalSnapshot {
@@ -201,6 +214,21 @@ async fn resize_pty(request: ResizeRequest) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn close_pty(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let mut readers_guard = state.readers.lock().await;
+    if let Some(task) = readers_guard.remove(&session_id) {
+        task.abort();
+    }
+
+    let mut snapshots_guard = state.terminal_snapshots.lock().await;
+    snapshots_guard.remove(&session_id);
+
+    PTY_REGISTRY.remove_session(&session_id);
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn ask_ollama(app_handle: AppHandle, request: AskOllamaRequest) -> Result<(), String> {
     let client = HTTP_CLIENT.clone();
     let AskOllamaRequest {
@@ -337,10 +365,29 @@ struct SystemContext {
     cwd: Option<String>,
     shell: Option<String>,
     ollama_online: bool,
+    cpu_usage: Option<f32>,
+    memory_usage: Option<f32>,
+}
+
+fn is_git_available() -> bool {
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        std::process::Command::new("git")
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    })
 }
 
 #[tauri::command]
-async fn get_system_context(_session_id: Option<String>) -> Result<SystemContext, String> {
+async fn get_system_context(
+    state: State<'_, AppState>,
+    _session_id: Option<String>,
+) -> Result<SystemContext, String> {
     use std::env;
     use std::process::Command;
 
@@ -372,25 +419,13 @@ async fn get_system_context(_session_id: Option<String>) -> Result<SystemContext
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
 
-    let git_branch = exe_dir.as_ref()
-        .and_then(|dir| {
-            Command::new("git")
-                .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                .current_dir(dir)
-                .stderr(std::process::Stdio::null())
-                .output()
-                .ok()
-                .filter(|output| output.status.success())
-                .and_then(|output| String::from_utf8(output.stdout).ok())
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
-        .or_else(|| {
-            // Fallback: try from cwd
-            cwd.as_ref().and_then(|dir| {
+    let git_branch = if is_git_available() {
+        exe_dir.as_ref()
+            .and_then(|dir| {
                 Command::new("git")
                     .args(["rev-parse", "--abbrev-ref", "HEAD"])
                     .current_dir(dir)
+                    .stdin(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .output()
                     .ok()
@@ -399,7 +434,25 @@ async fn get_system_context(_session_id: Option<String>) -> Result<SystemContext
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
             })
-        });
+            .or_else(|| {
+                // Fallback: try from cwd
+                cwd.as_ref().and_then(|dir| {
+                    Command::new("git")
+                        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                        .current_dir(dir)
+                        .stdin(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .output()
+                        .ok()
+                        .filter(|output| output.status.success())
+                        .and_then(|output| String::from_utf8(output.stdout).ok())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                })
+            })
+    } else {
+        None
+    };
 
     // Get local IP address
     let local_ip = get_local_ip();
@@ -412,6 +465,25 @@ async fn get_system_context(_session_id: Option<String>) -> Result<SystemContext
         .map(|res| res.status().is_success())
         .unwrap_or(false);
 
+    // Get CPU and Memory usage
+    let (cpu_usage, memory_usage) = {
+        let mut sys = state.system_info.lock().await;
+        sys.refresh_cpu();
+        sys.refresh_memory();
+        
+        let cpu = sys.global_cpu_info().cpu_usage();
+        
+        let total_mem = sys.total_memory();
+        let used_mem = sys.used_memory();
+        let mem = if total_mem > 0 {
+            (used_mem as f64 / total_mem as f64 * 100.0) as f32
+        } else {
+            0.0
+        };
+        
+        (cpu, mem)
+    };
+
     Ok(SystemContext {
         hostname,
         username,
@@ -420,6 +492,8 @@ async fn get_system_context(_session_id: Option<String>) -> Result<SystemContext
         cwd,
         shell,
         ollama_online,
+        cpu_usage: Some(cpu_usage),
+        memory_usage: Some(memory_usage),
     })
 }
 
@@ -1138,6 +1212,25 @@ fn spawn_terminal_reader(
     mut reader: Box<dyn Read + Send>,
     snapshots: Arc<Mutex<HashMap<String, TerminalSnapshot>>>,
 ) -> ReaderHandle {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(100);
+
+    let snapshots_clone = snapshots.clone();
+    let session_id_clone = session_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut batch = String::new();
+        while let Some(chunk) = rx.recv().await {
+            batch.push_str(&chunk);
+            while let Ok(next_chunk) = rx.try_recv() {
+                batch.push_str(&next_chunk);
+            }
+            let mut guard = snapshots_clone.lock().await;
+            if let Some(snapshot) = guard.get_mut(&session_id_clone) {
+                snapshot.append(&batch);
+            }
+            batch.clear();
+        }
+    });
+
     tauri::async_runtime::spawn_blocking(move || {
         let mut buf = [0_u8; 4096];
         loop {
@@ -1149,13 +1242,10 @@ fn spawn_terminal_reader(
                         session_id: session_id.clone(),
                         data: chunk.clone(),
                     };
-                    tauri::async_runtime::block_on(async {
-                        let mut guard = snapshots.lock().await;
-                        if let Some(snapshot) = guard.get_mut(&session_id) {
-                            snapshot.append(&chunk);
-                        }
-                    });
                     let _ = app_handle.emit("terminal-output", payload);
+                    if tx.blocking_send(chunk).is_err() {
+                        break;
+                    }
                 }
                 Err(err) => {
                     let payload = TerminalOutputPayload {
@@ -1170,8 +1260,48 @@ fn spawn_terminal_reader(
     })
 }
 
-fn suspicion_score(command: &str) -> i32 {
+fn normalize_command_heuristics(command: &str) -> String {
+    command
+        .replace('"', "")
+        .replace('\'', "")
+        .replace('\\', "")
+}
+
+fn is_destructive_rm(command: &str) -> bool {
     let lower = command.to_lowercase();
+    for cmd_part in lower.split(|c| c == ';' || c == '&' || c == '|') {
+        let trimmed = cmd_part.trim();
+        let words: Vec<&str> = trimmed.split_whitespace().collect();
+        for (i, &word) in words.iter().enumerate() {
+            if word == "rm" {
+                let mut has_r = false;
+                let mut has_f = false;
+                for &arg in words.iter().skip(i + 1) {
+                    if arg.starts_with('-') && !arg.starts_with("--") {
+                        if arg.contains('r') || arg.contains('R') {
+                            has_r = true;
+                        }
+                        if arg.contains('f') {
+                            has_f = true;
+                        }
+                    } else if arg == "--recursive" {
+                        has_r = true;
+                    } else if arg == "--force" {
+                        has_f = true;
+                    }
+                }
+                if has_r && has_f {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn suspicion_score(command: &str) -> i32 {
+    let normalized = normalize_command_heuristics(command);
+    let lower = normalized.to_lowercase();
     let mut score = 0;
 
     if lower.contains("sudo") {
@@ -1182,8 +1312,8 @@ fn suspicion_score(command: &str) -> i32 {
         score += 50;
     }
 
-    if lower.contains("rm -rf") || lower.contains("rm -fr") {
-        score += 20;
+    if is_destructive_rm(&lower) {
+        score += 50;
     }
 
     if lower.contains("base64") {
@@ -1202,17 +1332,18 @@ fn suspicion_score(command: &str) -> i32 {
 }
 
 fn collect_heuristic_reasons(command: &str) -> Vec<&'static str> {
+    let normalized = normalize_command_heuristics(command);
     let mut reasons = Vec::new();
 
-    if contains_piped_interpreter(command) {
+    if contains_piped_interpreter(&normalized) {
         reasons.push("Downloads remote content and pipes it directly into a shell");
     }
 
-    if command.contains("rm -rf") || command.contains("rm -fr") {
-        reasons.push("Contains destructive rm -rf deletion");
+    if is_destructive_rm(&normalized) {
+        reasons.push("Contains destructive rm -rf/recursive force deletion");
     }
 
-    if command.contains("/dev/tcp") || command.contains("/dev/udp") {
+    if normalized.contains("/dev/tcp") || normalized.contains("/dev/udp") {
         reasons.push("Uses /dev/tcp or /dev/udp for raw network sockets");
     }
 
@@ -1220,15 +1351,39 @@ fn collect_heuristic_reasons(command: &str) -> Vec<&'static str> {
 }
 
 fn contains_piped_interpreter(command: &str) -> bool {
-    let interpreters = ["| bash", "| sh", "| python", "| sudo bash", "| sudo sh"];
-    let downloaders = ["curl", "wget"]; // simple heuristic
-
-    if !command.contains('|') {
+    let lower = command.to_lowercase();
+    if !lower.contains('|') {
+        return false;
+    }
+    let downloaders = ["curl", "wget", "fetch"];
+    let has_downloader = downloaders.iter().any(|tool| lower.contains(tool));
+    if !has_downloader {
         return false;
     }
 
-    downloaders.iter().any(|tool| command.contains(tool))
-        && interpreters.iter().any(|interp| command.contains(interp))
+    for part in lower.split('|').skip(1) {
+        let trimmed = part.trim();
+        let mut words = trimmed.split_whitespace();
+        let mut first_word = words.next().unwrap_or("");
+        if first_word == "sudo" {
+            first_word = words.next().unwrap_or("");
+        }
+        let is_interpreter = first_word == "sh"
+            || first_word == "bash"
+            || first_word == "zsh"
+            || first_word == "fish"
+            || first_word == "python"
+            || first_word == "$shell"
+            || first_word.ends_with("/sh")
+            || first_word.ends_with("/bash")
+            || first_word.ends_with("/zsh")
+            || first_word.ends_with("/fish")
+            || first_word.ends_with("/python");
+        if is_interpreter {
+            return true;
+        }
+    }
+    false
 }
 
 fn references_ip(command: &str) -> bool {
@@ -1301,7 +1456,8 @@ pub fn run() {
             list_ollama_models,
             get_terminal_context,
             get_system_context,
-            analyze_command
+            analyze_command,
+            close_pty
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

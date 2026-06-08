@@ -1,6 +1,6 @@
 import { MouseEvent, useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Edit2, Play, Plus, Save, TerminalSquare, Trash2, X } from "lucide-react";
+import { Download, Edit2, Play, Plus, Save, TerminalSquare, Trash2, X } from "lucide-react";
 import clsx from "clsx";
 
 interface SavedCommand {
@@ -37,10 +37,13 @@ export function CommandsPanel({ open, onClose, onRunCommand }: CommandsPanelProp
   const [commands, setCommands] = useState<SavedCommand[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", command: "", description: "" });
+  const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
     if (open) {
-      setCommands(loadCommands());
+      const loaded = loadCommands();
+      setCommands(loaded);
+      setShowForm(loaded.length === 0);
     }
   }, [open]);
 
@@ -72,17 +75,22 @@ export function CommandsPanel({ open, onClose, onRunCommand }: CommandsPanelProp
 
     setEditingId(null);
     setEditForm({ name: "", command: "", description: "" });
-  }, [editForm, editingId]);
+    setShowForm(false);
+  }, [editForm, editingId, setShowForm]);
 
   const handleEdit = (cmd: SavedCommand) => {
     setEditingId(cmd.id);
     setEditForm({ name: cmd.name, command: cmd.command, description: cmd.description || "" });
+    setShowForm(true);
   };
 
   const handleDelete = (id: string) => {
     setCommands((prev) => {
       const updated = prev.filter((cmd) => cmd.id !== id);
       saveCommands(updated);
+      if (updated.length === 0) {
+        setShowForm(true);
+      }
       return updated;
     });
     if (editingId === id) {
@@ -99,14 +107,37 @@ export function CommandsPanel({ open, onClose, onRunCommand }: CommandsPanelProp
   const handleAddNew = () => {
     setEditingId(null);
     setEditForm({ name: "", command: "", description: "" });
+    setShowForm(true);
   };
 
   const handleCancel = () => {
     setEditingId(null);
     setEditForm({ name: "", command: "", description: "" });
+    setShowForm(commands.length === 0);
   };
 
-  const isFormVisible = editingId !== null || (editForm.name === "" && commands.length === 0);
+  const handleExport = () => {
+    if (commands.length === 0) return;
+    const content = commands
+      .map((cmd) => {
+        let str = `Name: ${cmd.name}\nCommand: ${cmd.command}`;
+        if (cmd.description) {
+          str += `\nDescription: ${cmd.description}`;
+        }
+        return str;
+      })
+      .join("\n\n---\n\n");
+
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "termalime-commands.txt";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <AnimatePresence>
@@ -138,7 +169,7 @@ export function CommandsPanel({ open, onClose, onRunCommand }: CommandsPanelProp
             </header>
 
             <section className="commands-list">
-              {commands.length === 0 && !editingId && (
+              {commands.length === 0 && !showForm && (
                 <p className="commands-empty">
                   No saved commands yet. Add your first command below!
                 </p>
@@ -183,7 +214,7 @@ export function CommandsPanel({ open, onClose, onRunCommand }: CommandsPanelProp
               ))}
             </section>
 
-            {(isFormVisible || editingId) && (
+            {showForm && (
               <section className="command-form">
                 <div className="command-form__row">
                   <input
@@ -228,10 +259,18 @@ export function CommandsPanel({ open, onClose, onRunCommand }: CommandsPanelProp
             )}
 
             <footer className="settings-panel__footer">
-              <button className="text-btn" onClick={handleAddNew}>
-                <Plus size={14} />
-                <span>Add new command</span>
-              </button>
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <button className="commands-footer-btn" onClick={handleAddNew}>
+                  <Plus size={14} />
+                  <span>Add new command</span>
+                </button>
+                {commands.length > 0 && (
+                  <button className="commands-footer-btn" onClick={handleExport} title="Export commands to .txt">
+                    <Download size={14} />
+                    <span>Export (.txt)</span>
+                  </button>
+                )}
+              </div>
               <span className="settings-panel__hint">{commands.length} saved</span>
             </footer>
           </motion.div>

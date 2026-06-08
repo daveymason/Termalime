@@ -79,6 +79,7 @@ impl PtySession {
             .context("failed to open PTY pair")?;
 
         let mut cmd = CommandBuilder::new(shell_cmd);
+        cmd.arg("-i");
         cmd.env("TERM", "xterm-256color");
 
         let child = pair
@@ -120,6 +121,12 @@ impl PtySession {
 
     pub fn take_reader(&mut self) -> Option<Box<dyn Read + Send>> {
         self.reader.take()
+    }
+}
+
+impl Drop for PtySession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
     }
 }
 

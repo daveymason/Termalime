@@ -2,14 +2,22 @@ name: CI — build tauri app
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, v0.4-sustain ]
+    tags:
+      - 'v*'
   pull_request:
-    branches: [ main ]
+    branches: [ main, v0.4-sustain ]
 
 jobs:
-  build-linux:
-    name: Build (linux)
-    runs-on: ubuntu-latest
+  build-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +31,8 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install system packages (GTK, WebKit, AppImage deps)
+      - name: Install system packages (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential curl wget pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libfuse2
@@ -41,18 +50,19 @@ jobs:
       - name: Install NPM dependencies
         run: npm ci
 
-      - name: Build frontend (Vite)
-        run: npm run build
-
-      - name: Tauri build
-        # runs `npm run tauri build` which uses the project-local @tauri-apps/cli
+      - name: Build and Publish Release
+        uses: tauri-apps/tauri-action@v0
         env:
-          # ensures Tauri uses the release profile
-          TAURI_SKIP_TAURI_BUILD: 'false'
-        run: npm run tauri build --if-present
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: 'Termalime v__VERSION__'
+          releaseBody: 'See README.md for release notes.'
+          releaseDraft: true
+          prerelease: false
 
       - name: Upload packaging artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-bundles
+          name: tauri-bundles-${{ matrix.platform }}
           path: src-tauri/target/release/bundle

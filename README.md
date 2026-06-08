@@ -89,14 +89,31 @@ Artifacts land under `src-tauri/target/release/bundle/`:
 
 Adjust `bundle.targets` or metadata inside `src-tauri/tauri.conf.json` if you only need specific formats or want to bump versions.
 
-V0.2 Releases - November 25
+### V0.2 Released - November 25 - Codename: Pre Flight
 - Introduces the preflight checker that checks potential malicious commands which are pasted in
 - Adds a settings menu for Bot tweaking and visual settings
 
-V0.3 Released - December 25
+### V0.3 Released - December 25 - Codename: Context
 - Adds the Context Bar
 - Adds a new command panel to CRUD commands
 - Brings in a new Auto-reconnect for Models which act strang upon start up (Ministral)
 - Minor bug fixes
 
-Plan v0.4.0: Windows / MacOSx support & more context info (CPU/memory). 
+### V0.4 Released - June 26 - Codename: Sustain
+- New Features:
+  - Ability to create new terminal tabs
+  - Enhanced Context Bar with CPU/Memory usage
+  - Export .TXT functionality to saved commands panel
+- Optimizations & Security Patches:
+  - Optimized PTY reader lock contention using asynchronous channel-based batching
+  - Hardened preflight heuristic checks with command tokenization to prevent bypasses
+  - Secured git subprocesses by checking execution capability and nullifying stdin/stderr pipes
+  - Scanned and updated frontend and backend dependencies to patch security vulnerabilities
+- Bug Fixes & UX:
+  - Fixed PTY session and reader thread leaks when closing terminal windows
+  - Fixed sidebar command button integration to correctly run commands in PTY
+  - Fixed saved commands panel form visibility toggling when typing new commands
+  - Added export functionality for saved commands to clean `.txt` files
+- Termaline V0.4.0 is now available for testing on Windows and MacOSX. **Please note that this is an alpha version and may contain bugs**
+
+### V0.5 Planned - Codename: Eco
