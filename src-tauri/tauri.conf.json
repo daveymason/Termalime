@@ -20,7 +20,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc:;"
+      "csp": "default-src 'self'; img-src 'self' asset: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc:;",
+      "dangerousDisableAssetCspModification": ["style-src"]
     }
   },
   "bundle": {

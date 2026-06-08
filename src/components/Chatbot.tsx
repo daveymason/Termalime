@@ -201,10 +201,10 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
             prev.map((message) =>
               message.id === activeResponseId
                 ? {
-                    ...message,
-                    pending: false,
-                    content: message.content || payload.error || "Ollama error",
-                  }
+                  ...message,
+                  pending: false,
+                  content: message.content || payload.error || "Ollama error",
+                }
                 : message,
             ),
           );
@@ -225,10 +225,10 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
           prev.map((message) =>
             message.id === activeResponseId
               ? {
-                  ...message,
-                  content: nextContent,
-                  pending: !payload.done,
-                }
+                ...message,
+                content: nextContent,
+                pending: !payload.done,
+              }
               : message,
           ),
         );
@@ -252,9 +252,9 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
 
     const attemptConnection = async () => {
       if (cancelled) return;
-      
+
       const success = await refreshHealth();
-      
+
       if (!success && !cancelled && retryCount < maxRetries) {
         retryCount++;
         const delay = baseDelay * Math.pow(1.5, retryCount - 1); // 1s, 1.5s, 2.25s, 3.4s, 5s
@@ -392,10 +392,10 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
         prev.map((message) =>
           message.id === assistantMessage.id
             ? {
-                ...message,
-                content: "Failed to reach Ollama.",
-                pending: false,
-              }
+              ...message,
+              content: "Failed to reach Ollama.",
+              pending: false,
+            }
             : message,
         ),
       );
@@ -595,7 +595,6 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
             {isStreaming ? (
               <span className="chat-button__content">
                 <Loader2 size={16} className="icon-spin" />
-                Streaming
               </span>
             ) : (
               <span className="chat-button__content">
