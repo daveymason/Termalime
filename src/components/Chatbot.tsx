@@ -10,7 +10,7 @@ import {
   UserRound,
   WifiOff,
 } from "lucide-react";
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, memo, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { PERSONA_DESCRIPTIONS, useSettings } from "../state/settings";
@@ -44,31 +44,63 @@ const formatTimestamp = (value: number) =>
     minute: "2-digit",
   }).format(value);
 
-const mergeStreamContent = (previous: string, incoming: string) => {
-  if (!previous) {
-    return incoming;
-  }
-  if (incoming.startsWith(previous)) {
-    return incoming;
-  }
-  if (previous.startsWith(incoming)) {
-    return previous;
-  }
-
-  const maxOverlap = Math.min(previous.length, incoming.length);
-  let overlap = 0;
-  for (let size = maxOverlap; size > 0; size -= 1) {
-    if (previous.slice(-size) === incoming.slice(0, size)) {
-      overlap = size;
-      break;
-    }
-  }
-  return previous + incoming.slice(overlap);
-};
 
 interface ChatbotProps {
   sessionId?: string | null;
 }
+
+type MessageItemProps = {
+  message: ChatMessage;
+  onCopy: (message: ChatMessage) => void;
+  onDelete: (messageId: string) => void;
+};
+
+const MessageItem = memo(({ message, onCopy, onDelete }: MessageItemProps) => (
+  <article className={clsx("chat-message", `chat-message--${message.role}`)}>
+    <div className="chat-message__actions" aria-label="Message actions">
+      <button
+        type="button"
+        aria-label="Copy message"
+        title="Copy message"
+        onClick={() => onCopy(message)}
+        disabled={!message.content}
+      >
+        <Copy size={14} />
+      </button>
+      <button
+        type="button"
+        aria-label="Delete message"
+        title="Delete message"
+        onClick={() => onDelete(message.id)}
+      >
+        <Trash2 size={14} />
+      </button>
+    </div>
+    <header className="chat-message__meta">
+      {message.role === "assistant" ? <Bot size={14} /> : <UserRound size={14} />}
+      <span>
+        {message.role === "assistant" ? message.model ?? "Ollama" : "You"}
+      </span>
+      {message.pending && <span className="typing-dot">●</span>}
+    </header>
+    <div className="chat-message__content">
+      {message.role === "assistant" ? (
+        <div className="chat-markdown">
+          <ReactMarkdown>
+            {message.content || (message.pending ? "…" : "")}
+          </ReactMarkdown>
+        </div>
+      ) : (
+        <p>{message.content}</p>
+      )}
+    </div>
+    <footer className="chat-message__meta-line">
+      <span>{formatTimestamp(message.timestamp)}</span>
+    </footer>
+  </article>
+));
+
+MessageItem.displayName = "MessageItem";
 
 const Chatbot = ({ sessionId }: ChatbotProps) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -83,7 +115,12 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
   const responseIdRef = useRef<string | null>(null);
   const responseBufferRef = useRef<string>("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const modelRef = useRef(model);
   const { settings } = useSettings();
+
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
 
   const handleCopyMessage = useCallback(async (message: ChatMessage) => {
     const text = message.content?.trim();
@@ -145,7 +182,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
         );
       } else {
         setChatError((prev) => (prev?.includes("No local Ollama") ? null : prev));
-        if (!models.includes(model)) {
+        if (!models.includes(modelRef.current)) {
           setModel(models[0]);
         }
       }
@@ -159,7 +196,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     } finally {
       setLoadingModels(false);
     }
-  }, [model]);
+  }, []);
 
   const refreshHealth = useCallback(async (): Promise<boolean> => {
     setCheckingOllama(true);
@@ -216,9 +253,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
       if (payload.content && activeResponseId) {
         setChatError(null);
         setOllamaOnline(true);
-        const previous = responseBufferRef.current;
-        const incoming = payload.content;
-        const nextContent = mergeStreamContent(previous, incoming);
+        const nextContent = responseBufferRef.current + payload.content;
 
         responseBufferRef.current = nextContent;
         setMessages((prev) =>
@@ -272,24 +307,37 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
   }, [refreshHealth]);
 
   useEffect(() => {
+    let active = true;
     let unlisten: UnlistenFn | undefined;
 
     const attach = async () => {
-      unlisten = await listen<OllamaChunkPayload>("ollama-chunk", (event) => {
+      const unsub = await listen<OllamaChunkPayload>("ollama-chunk", (event) => {
+        if (!active) {
+          return;
+        }
         handleAssistantChunk(event.payload);
       });
+
+      if (!active) {
+        unsub();
+      } else {
+        unlisten = unsub;
+      }
     };
 
     attach().catch((error) => console.error(error));
 
     return () => {
+      active = false;
       unlisten?.();
     };
   }, [handleAssistantChunk]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    // Smooth scrolling restarts its animation on every streamed chunk, so
+    // fall back to an instant scroll while a response is streaming.
+    bottomRef.current?.scrollIntoView({ behavior: isStreaming ? "auto" : "smooth" });
+  }, [messages, isStreaming]);
 
   const sendPrompt = useCallback(async () => {
     const trimmed = input.trim();
@@ -533,51 +581,12 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
             </div>
           )}
           {messages.map((message) => (
-            <article
+            <MessageItem
               key={message.id}
-              className={clsx("chat-message", `chat-message--${message.role}`)}
-            >
-              <div className="chat-message__actions" aria-label="Message actions">
-                <button
-                  type="button"
-                  aria-label="Copy message"
-                  title="Copy message"
-                  onClick={() => handleCopyMessage(message)}
-                  disabled={!message.content}
-                >
-                  <Copy size={14} />
-                </button>
-                <button
-                  type="button"
-                  aria-label="Delete message"
-                  title="Delete message"
-                  onClick={() => handleDeleteMessage(message.id)}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-              <header className="chat-message__meta">
-                {message.role === "assistant" ? <Bot size={14} /> : <UserRound size={14} />}
-                <span>
-                  {message.role === "assistant" ? message.model ?? "Ollama" : "You"}
-                </span>
-                {message.pending && <span className="typing-dot">●</span>}
-              </header>
-              <div className="chat-message__content">
-                {message.role === "assistant" ? (
-                  <div className="chat-markdown">
-                    <ReactMarkdown>
-                      {message.content || (message.pending ? "…" : "")}
-                    </ReactMarkdown>
-                  </div>
-                ) : (
-                  <p>{message.content}</p>
-                )}
-              </div>
-              <footer className="chat-message__meta-line">
-                <span>{formatTimestamp(message.timestamp)}</span>
-              </footer>
-            </article>
+              message={message}
+              onCopy={handleCopyMessage}
+              onDelete={handleDeleteMessage}
+            />
           ))}
           <div ref={bottomRef} />
         </div>

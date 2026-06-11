@@ -57,11 +57,16 @@ export const SettingsProvider = ({ children }: { children: ReactNode }) => {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-    } catch (error) {
-      console.warn("Failed to persist settings", error);
-    }
+    // Debounced so typing in the system-prompt textarea doesn't hit
+    // localStorage on every keystroke.
+    const timeout = window.setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+      } catch (error) {
+        console.warn("Failed to persist settings", error);
+      }
+    }, 300);
+    return () => window.clearTimeout(timeout);
   }, [settings]);
 
   const value = useMemo<SettingsContextValue>(() => {

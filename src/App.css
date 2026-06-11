@@ -1429,3 +1429,39 @@ body {
     justify-content: center;
   }
 }
+/* Eco release (v0.5) */
+.context-item--eco svg {
+  color: rgba(74, 222, 128, 0.75);
+}
+
+.context-item--eco {
+  color: rgba(187, 247, 208, 0.9);
+}
+
+.eco-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}
+
+.eco-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(74, 222, 128, 0.18);
+  background: rgba(74, 222, 128, 0.06);
+}
+
+.eco-stat__value {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: rgba(187, 247, 208, 0.95);
+}
+
+.eco-stat__label {
+  font-size: 0.72rem;
+  color: rgba(180, 230, 220, 0.65);
+}
