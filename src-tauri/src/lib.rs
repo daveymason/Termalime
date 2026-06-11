@@ -10,6 +10,26 @@ const PREFLIGHT_SYSTEM_PROMPT: &str = "You are a senior security operations (SOC
 const PREFLIGHT_REPAIR_PROMPT: &str = "You are a JSON repair bot. Convert the provided text into valid JSON with the keys summary (string), is_risky (boolean), risk_reason (string), and safe_alternative (string, optional). Respond with JSON only.";
 const PREFLIGHT_TEXT_PROMPT: &str = "You are a senior SOC analyst. Provide a concise assessment of a shell command using exactly three plain-text lines, no code fences or quoting: (1) 'Summary: <what the command does>' (2) 'Likelihood of maliciousness: <percentage 0-100>' (3) 'Rationale: <explain how an attacker could abuse the command or why it's risky>'. Keep the rationale focused on potential malicious impact rather than benign behavior.";
 
+// --- Eco savings model -------------------------------------------------------
+// Estimates what an equivalent cloud LLM API call would have cost in energy,
+// water, and CO2, compared against the energy this machine actually spent on
+// local inference. All figures are rough public estimates, kept conservative:
+//
+// - Cloud energy: ~0.34 Wh per median chatbot query of ~500 tokens (Epoch AI
+//   estimate for GPT-4o-class serving, datacenter overhead included), scaled
+//   linearly by token count.
+// - Local energy: wall-clock inference time multiplied by a typical consumer
+//   CPU/GPU package draw of 45 W.
+// - Water: datacenters consume ~1.8 mL per Wh (onsite cooling plus offsite
+//   electricity generation); home electricity only carries the generation
+//   share, ~0.9 mL per Wh.
+// - CO2: world-average grid intensity, ~0.4 g CO2e per Wh.
+const CLOUD_WH_PER_1K_TOKENS: f64 = 0.68;
+const LOCAL_DEVICE_WATTS: f64 = 45.0;
+const WATER_ML_PER_WH_CLOUD: f64 = 1.8;
+const WATER_ML_PER_WH_LOCAL: f64 = 0.9;
+const CO2_G_PER_WH: f64 = 0.4;
+
 use anyhow::Error;
 use futures_util::StreamExt;
 use once_cell::sync::Lazy;
@@ -19,8 +39,11 @@ use serde::{de::Error as _, Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
 static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
+    // A total request timeout would cut off streamed chat responses that take
+    // longer than the limit, so bound connect and per-read idle time instead.
     Client::builder()
-        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(5))
+        .read_timeout(Duration::from_secs(120))
         .build()
         .expect("failed to initialize reqwest client")
 });
@@ -30,17 +53,20 @@ type ReaderHandle = tauri::async_runtime::JoinHandle<()>;
 struct AppState {
     readers: Arc<Mutex<HashMap<String, ReaderHandle>>>,
     terminal_snapshots: Arc<Mutex<HashMap<String, TerminalSnapshot>>>,
-    system_info: Mutex<sysinfo::System>,
+    system_info: Arc<std::sync::Mutex<sysinfo::System>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        let mut sys = sysinfo::System::new_all();
-        sys.refresh_all();
+        // Only global CPU and memory stats are consumed; new_all() would
+        // enumerate every process on the machine at startup.
+        let mut sys = sysinfo::System::new();
+        sys.refresh_cpu();
+        sys.refresh_memory();
         Self {
             readers: Default::default(),
             terminal_snapshots: Default::default(),
-            system_info: Mutex::new(sys),
+            system_info: Arc::new(std::sync::Mutex::new(sys)),
         }
     }
 }
@@ -55,7 +81,11 @@ impl TerminalSnapshot {
     fn append(&mut self, chunk: &str) {
         self.buffer.push_str(chunk);
         if self.buffer.len() > TERMINAL_BUFFER_MAX {
-            let excess = self.buffer.len() - TERMINAL_BUFFER_MAX;
+            // Round up to a char boundary: draining mid-character panics.
+            let mut excess = self.buffer.len() - TERMINAL_BUFFER_MAX;
+            while excess < self.buffer.len() && !self.buffer.is_char_boundary(excess) {
+                excess += 1;
+            }
             self.buffer.drain(..excess);
         }
     }
@@ -86,6 +116,59 @@ struct OllamaChunkPayload {
     content: Option<String>,
     done: bool,
     error: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct EcoSavings {
+    tokens: u64,
+    energy_wh: f64,
+    co2_g: f64,
+    water_ml: f64,
+}
+
+fn compute_eco_savings(prompt_tokens: u64, output_tokens: u64, duration_ns: u64) -> EcoSavings {
+    let tokens = prompt_tokens + output_tokens;
+    let cloud_wh = (tokens as f64 / 1000.0) * CLOUD_WH_PER_1K_TOKENS;
+    let local_wh = (duration_ns as f64 / 3.6e12) * LOCAL_DEVICE_WATTS; // ns -> hours
+    let saved_wh = (cloud_wh - local_wh).max(0.0);
+    let saved_water =
+        (cloud_wh * WATER_ML_PER_WH_CLOUD - local_wh * WATER_ML_PER_WH_LOCAL).max(0.0);
+
+    EcoSavings {
+        tokens,
+        energy_wh: saved_wh,
+        co2_g: saved_wh * CO2_G_PER_WH,
+        water_ml: saved_water,
+    }
+}
+
+/// Emits the eco savings of one local LLM round-trip to the frontend.
+fn emit_eco_savings(app_handle: &AppHandle, savings: EcoSavings) {
+    let _ = app_handle.emit("eco-savings", savings);
+}
+
+/// Extracts token/duration stats from a non-streaming Ollama chat response
+/// and reports the resulting savings.
+fn emit_eco_from_response(app_handle: &AppHandle, payload: &serde_json::Value) {
+    let prompt_tokens = payload
+        .get("prompt_eval_count")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let output_tokens = payload
+        .get("eval_count")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    if prompt_tokens + output_tokens == 0 {
+        return;
+    }
+    let duration_ns = payload
+        .get("total_duration")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    emit_eco_savings(
+        app_handle,
+        compute_eco_savings(prompt_tokens, output_tokens, duration_ns),
+    );
 }
 
 #[derive(Deserialize)]
@@ -383,79 +466,109 @@ fn is_git_available() -> bool {
     })
 }
 
+const GIT_BRANCH_CACHE_TTL: Duration = Duration::from_secs(30);
+
+static GIT_BRANCH_CACHE: Lazy<std::sync::Mutex<Option<(std::time::Instant, Option<String>)>>> =
+    Lazy::new(|| std::sync::Mutex::new(None));
+
+fn detect_git_branch(cwd: Option<&str>) -> Option<String> {
+    use std::process::Command;
+
+    if !is_git_available() {
+        return None;
+    }
+
+    let run = |dir: &std::path::Path| {
+        Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+
+    // Try from the executable's directory first (likely the project): go up
+    // from target/debug to the project root.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+
+    exe_dir
+        .as_deref()
+        .and_then(run)
+        .or_else(|| cwd.map(std::path::Path::new).and_then(run))
+}
+
+/// The branch rarely changes, so don't fork `git` on every 5s context poll.
+fn cached_git_branch(cwd: Option<&str>) -> Option<String> {
+    {
+        let cache = GIT_BRANCH_CACHE.lock().expect("git branch cache poisoned");
+        if let Some((checked_at, branch)) = cache.as_ref() {
+            if checked_at.elapsed() < GIT_BRANCH_CACHE_TTL {
+                return branch.clone();
+            }
+        }
+    }
+
+    let branch = detect_git_branch(cwd);
+    *GIT_BRANCH_CACHE.lock().expect("git branch cache poisoned") =
+        Some((std::time::Instant::now(), branch.clone()));
+    branch
+}
+
 #[tauri::command]
 async fn get_system_context(
     state: State<'_, AppState>,
     _session_id: Option<String>,
 ) -> Result<SystemContext, String> {
     use std::env;
-    use std::process::Command;
 
-    // Get hostname
-    let hostname = hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok());
-
-    // Get username
     let username = env::var("USER")
         .or_else(|_| env::var("USERNAME"))
         .ok();
 
-    // Get shell
     let shell = env::var("SHELL")
         .ok()
         .and_then(|s| s.split('/').last().map(String::from));
 
-    // Get current working directory
     let cwd = env::current_dir()
         .ok()
         .and_then(|p| p.to_str().map(String::from));
 
-    // Get git branch - try from the executable's directory first (likely the project)
-    let exe_dir = env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        // Go up from target/debug to project root
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    // Subprocess spawns and sysinfo refreshes block, so keep them off the
+    // async runtime's worker threads.
+    let system_info = state.system_info.clone();
+    let blocking_cwd = cwd.clone();
+    let (hostname, git_branch, local_ip, cpu_usage, memory_usage) =
+        tauri::async_runtime::spawn_blocking(move || {
+            let hostname = hostname::get().ok().and_then(|h| h.into_string().ok());
+            let git_branch = cached_git_branch(blocking_cwd.as_deref());
+            let local_ip = get_local_ip();
 
-    let git_branch = if is_git_available() {
-        exe_dir.as_ref()
-            .and_then(|dir| {
-                Command::new("git")
-                    .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                    .current_dir(dir)
-                    .stdin(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .output()
-                    .ok()
-                    .filter(|output| output.status.success())
-                    .and_then(|output| String::from_utf8(output.stdout).ok())
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            })
-            .or_else(|| {
-                // Fallback: try from cwd
-                cwd.as_ref().and_then(|dir| {
-                    Command::new("git")
-                        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                        .current_dir(dir)
-                        .stdin(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .output()
-                        .ok()
-                        .filter(|output| output.status.success())
-                        .and_then(|output| String::from_utf8(output.stdout).ok())
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                })
-            })
-    } else {
-        None
-    };
+            let mut sys = system_info.lock().expect("system info mutex poisoned");
+            sys.refresh_cpu();
+            sys.refresh_memory();
 
-    // Get local IP address
-    let local_ip = get_local_ip();
+            let cpu = sys.global_cpu_info().cpu_usage();
+            let total_mem = sys.total_memory();
+            let used_mem = sys.used_memory();
+            let mem = if total_mem > 0 {
+                (used_mem as f64 / total_mem as f64 * 100.0) as f32
+            } else {
+                0.0
+            };
+
+            (hostname, git_branch, local_ip, cpu, mem)
+        })
+        .await
+        .map_err(|err| err.to_string())?;
 
     // Check if Ollama is online
     let ollama_online = HTTP_CLIENT
@@ -464,25 +577,6 @@ async fn get_system_context(
         .await
         .map(|res| res.status().is_success())
         .unwrap_or(false);
-
-    // Get CPU and Memory usage
-    let (cpu_usage, memory_usage) = {
-        let mut sys = state.system_info.lock().await;
-        sys.refresh_cpu();
-        sys.refresh_memory();
-        
-        let cpu = sys.global_cpu_info().cpu_usage();
-        
-        let total_mem = sys.total_memory();
-        let used_mem = sys.used_memory();
-        let mem = if total_mem > 0 {
-            (used_mem as f64 / total_mem as f64 * 100.0) as f32
-        } else {
-            0.0
-        };
-        
-        (cpu, mem)
-    };
 
     Ok(SystemContext {
         hostname,
@@ -532,7 +626,10 @@ async fn list_ollama_models() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-async fn analyze_command(request: AnalyzeCommandRequest) -> Result<AnalyzeCommandResponse, String> {
+async fn analyze_command(
+    app_handle: AppHandle,
+    request: AnalyzeCommandRequest,
+) -> Result<AnalyzeCommandResponse, String> {
     let AnalyzeCommandRequest { command, model } = request;
     let command = command.trim().to_string();
     if command.is_empty() {
@@ -606,6 +703,7 @@ async fn analyze_command(request: AnalyzeCommandRequest) -> Result<AnalyzeComman
     }
 
     let payload: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
+    emit_eco_from_response(&app_handle, &payload);
     let content = payload
         .get("message")
         .and_then(|msg| msg.get("content"))
@@ -614,10 +712,10 @@ async fn analyze_command(request: AnalyzeCommandRequest) -> Result<AnalyzeComman
 
     let parsed_report: Option<PreflightReport> = match parse_preflight_report(content) {
         Ok(report) => Some(report),
-        Err(parse_error) => match repair_preflight_report(&resolved_model, content).await {
+        Err(parse_error) => match repair_preflight_report(&app_handle, &resolved_model, content).await {
             Ok(Some(report)) => Some(report),
             Ok(None) => {
-                let assessment = fallback_text_summary(&resolved_model, &command, content, Some(&parse_error))
+                let assessment = fallback_text_summary(&app_handle, &resolved_model, &command, content, Some(&parse_error))
                     .await
                     .unwrap_or_else(|fallback_error| {
                         format!(
@@ -654,7 +752,7 @@ async fn analyze_command(request: AnalyzeCommandRequest) -> Result<AnalyzeComman
                 });
             }
             Err(repair_error) => {
-                let assessment = fallback_text_summary(&resolved_model, &command, content, Some(&parse_error))
+                let assessment = fallback_text_summary(&app_handle, &resolved_model, &command, content, Some(&parse_error))
                     .await
                     .unwrap_or_else(|fallback_error| {
                         format!(
@@ -1033,6 +1131,7 @@ fn replace_quotes_inside_backticks(input: &str) -> Option<String> {
 }
 
 async fn repair_preflight_report(
+    app_handle: &AppHandle,
     model: &str,
     raw_content: &str,
 ) -> Result<Option<PreflightReport>, String> {
@@ -1069,6 +1168,7 @@ async fn repair_preflight_report(
     }
 
     let payload: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
+    emit_eco_from_response(app_handle, &payload);
     let content = payload
         .get("message")
         .and_then(|msg| msg.get("content"))
@@ -1088,6 +1188,7 @@ async fn repair_preflight_report(
 }
 
 async fn fallback_text_summary(
+    app_handle: &AppHandle,
     model: &str,
     command: &str,
     raw_content: &str,
@@ -1128,6 +1229,7 @@ async fn fallback_text_summary(
     }
 
     let payload: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
+    emit_eco_from_response(app_handle, &payload);
     let content = payload
         .get("message")
         .and_then(|msg| msg.get("content"))
@@ -1178,6 +1280,12 @@ fn handle_ollama_chunk(app_handle: &AppHandle, chunk: OllamaResponseChunk) {
         return;
     }
 
+    if chunk.done.unwrap_or(false) {
+        if let Some(savings) = chunk.eco_savings() {
+            emit_eco_savings(app_handle, savings);
+        }
+    }
+
     if let Some(message) = chunk.message {
         emit_ollama_chunk(
             app_handle,
@@ -1214,8 +1322,9 @@ fn spawn_terminal_reader(
 ) -> ReaderHandle {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(100);
 
-    let snapshots_clone = snapshots.clone();
-    let session_id_clone = session_id.clone();
+    // Emitting from this task instead of the blocking reader coalesces bursts
+    // of PTY output into one IPC event per wakeup instead of one per read.
+    let emit_session_id = session_id.clone();
     tauri::async_runtime::spawn(async move {
         let mut batch = String::new();
         while let Some(chunk) = rx.recv().await {
@@ -1223,8 +1332,13 @@ fn spawn_terminal_reader(
             while let Ok(next_chunk) = rx.try_recv() {
                 batch.push_str(&next_chunk);
             }
-            let mut guard = snapshots_clone.lock().await;
-            if let Some(snapshot) = guard.get_mut(&session_id_clone) {
+            let payload = TerminalOutputPayload {
+                session_id: emit_session_id.clone(),
+                data: batch.clone(),
+            };
+            let _ = app_handle.emit("terminal-output", payload);
+            let mut guard = snapshots.lock().await;
+            if let Some(snapshot) = guard.get_mut(&emit_session_id) {
                 snapshot.append(&batch);
             }
             batch.clear();
@@ -1233,26 +1347,42 @@ fn spawn_terminal_reader(
 
     tauri::async_runtime::spawn_blocking(move || {
         let mut buf = [0_u8; 4096];
+        // Reads can split a multi-byte UTF-8 sequence; carry the incomplete
+        // tail over to the next read instead of emitting replacement chars.
+        let mut pending: Vec<u8> = Vec::new();
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(len) => {
-                    let chunk = String::from_utf8_lossy(&buf[..len]).to_string();
-                    let payload = TerminalOutputPayload {
-                        session_id: session_id.clone(),
-                        data: chunk.clone(),
+                    pending.extend_from_slice(&buf[..len]);
+                    let chunk = match std::str::from_utf8(&pending) {
+                        Ok(valid) => {
+                            let chunk = valid.to_string();
+                            pending.clear();
+                            chunk
+                        }
+                        Err(err) if err.error_len().is_none() => {
+                            let valid_up_to = err.valid_up_to();
+                            let chunk =
+                                String::from_utf8_lossy(&pending[..valid_up_to]).to_string();
+                            pending.drain(..valid_up_to);
+                            chunk
+                        }
+                        Err(_) => {
+                            let chunk = String::from_utf8_lossy(&pending).to_string();
+                            pending.clear();
+                            chunk
+                        }
                     };
-                    let _ = app_handle.emit("terminal-output", payload);
+                    if chunk.is_empty() {
+                        continue;
+                    }
                     if tx.blocking_send(chunk).is_err() {
                         break;
                     }
                 }
                 Err(err) => {
-                    let payload = TerminalOutputPayload {
-                        session_id: session_id.clone(),
-                        data: format!("[PTY ERROR] {err}"),
-                    };
-                    let _ = app_handle.emit("terminal-output", payload);
+                    let _ = tx.blocking_send(format!("[PTY ERROR] {err}"));
                     break;
                 }
             }
@@ -1413,6 +1543,25 @@ struct OllamaResponseChunk {
     message: Option<OllamaMessage>,
     done: Option<bool>,
     error: Option<String>,
+    // Inference stats Ollama attaches to the final chunk of a stream.
+    prompt_eval_count: Option<u64>,
+    eval_count: Option<u64>,
+    total_duration: Option<u64>,
+}
+
+impl OllamaResponseChunk {
+    fn eco_savings(&self) -> Option<EcoSavings> {
+        let prompt_tokens = self.prompt_eval_count.unwrap_or(0);
+        let output_tokens = self.eval_count.unwrap_or(0);
+        if prompt_tokens + output_tokens == 0 {
+            return None;
+        }
+        Some(compute_eco_savings(
+            prompt_tokens,
+            output_tokens,
+            self.total_duration.unwrap_or(0),
+        ))
+    }
 }
 
 #[derive(Deserialize)]

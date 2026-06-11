@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Copy,
   Cpu,
+  Droplets,
   GitBranch,
+  Leaf,
   MemoryStick,
   Monitor,
   Network,
@@ -11,6 +13,7 @@ import {
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import CommandsButton from "./CommandsPanel";
+import { formatCo2, formatWater, useEco } from "../state/eco";
 
 interface ContextBarProps {
   onSettingsClick: () => void;
@@ -49,12 +52,19 @@ const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
     }
   }, [sessionId]);
 
-  // Poll for context updates
+  // Poll for context updates; skip ticks while the window is hidden so a
+  // backgrounded app doesn't keep burning CPU on polling.
   useEffect(() => {
     fetchContext();
-    const interval = setInterval(fetchContext, 5000); // Update every 5 seconds
+    const interval = setInterval(() => {
+      if (!document.hidden) {
+        fetchContext();
+      }
+    }, 5000); // Update every 5 seconds
     return () => clearInterval(interval);
   }, [fetchContext]);
+
+  const { session, lifetime } = useEco();
 
   return (
     <footer className="context-bar">
@@ -121,6 +131,26 @@ const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
                 <span>{context.memoryUsage.toFixed(0)}%</span>
               </div>
             )}
+
+            <div
+              className="context-item context-item--eco"
+              title={`CO₂ saved by running locally instead of a cloud LLM — session: ${formatCo2(
+                session.co2G,
+              )} (${session.requests} requests), all time: ${formatCo2(lifetime.co2G)}`}
+            >
+              <Leaf size={13} />
+              <span>{formatCo2(session.co2G)}</span>
+            </div>
+
+            <div
+              className="context-item context-item--eco"
+              title={`Water saved by running locally instead of a cloud LLM — session: ${formatWater(
+                session.waterMl,
+              )}, all time: ${formatWater(lifetime.waterMl)}`}
+            >
+              <Droplets size={13} />
+              <span>{formatWater(session.waterMl)}</span>
+            </div>
           </div>
         </>
       )}

@@ -45,6 +45,8 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
   const { settings } = useSettings();
   const commandBufferRef = useRef<string>("");
   const preflightEnabledRef = useRef(settings.preflightCheck);
+  const preflightModelRef = useRef(settings.preflightModel);
+  const onSessionChangeRef = useRef(onSessionChange);
   const [preflightState, setPreflightState] = useState<PreflightState>({
     status: "hidden",
     command: "",
@@ -55,6 +57,14 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
   useEffect(() => {
     preflightEnabledRef.current = settings.preflightCheck;
   }, [settings.preflightCheck]);
+
+  useEffect(() => {
+    preflightModelRef.current = settings.preflightModel;
+  }, [settings.preflightModel]);
+
+  useEffect(() => {
+    onSessionChangeRef.current = onSessionChange;
+  }, [onSessionChange]);
 
   useEffect(() => {
     preflightStatusRef.current = preflightState.status;
@@ -136,7 +146,7 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
 
   const startPreflightCheck = useCallback(
     (command: string, onAllow?: () => void) => {
-      const model = settings.preflightModel?.trim();
+      const model = preflightModelRef.current?.trim();
       if (IS_DEV) {
         console.debug("[preflight] analyzing command", { command, model });
       }
@@ -216,7 +226,7 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
           });
         });
     },
-    [resetPreflight, sendToPty, settings.preflightModel],
+    [resetPreflight, sendToPty],
   );
 
   const handlePreflightCancel = useCallback(() => {
@@ -291,7 +301,7 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
         sendToPty(normalized + "\r");
       };
 
-      if (!settings.preflightCheck) {
+      if (!preflightEnabledRef.current) {
         forwardToPty();
         return;
       }
@@ -303,7 +313,7 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
     return () => {
       window.removeEventListener("termalime:run-command", handleRunCommand);
     };
-  }, [sendToPty, startPreflightCheck, updateCommandBuffer, settings.preflightCheck]);
+  }, [sendToPty, startPreflightCheck, updateCommandBuffer]);
 
   useEffect(() => {
     let active = true;
@@ -376,7 +386,7 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
         }
         spawnedSessionId = id;
         sessionIdRef.current = id;
-        onSessionChange?.(id);
+        onSessionChangeRef.current?.(id);
         setStatus("ready");
         fitAddon.fit();
         await sendResize();
@@ -400,7 +410,7 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
       if (resizeFrameRef.current) {
         cancelAnimationFrame(resizeFrameRef.current);
       }
-      onSessionChange?.(null);
+      onSessionChangeRef.current?.(null);
       term.dispose();
       termRef.current = null;
       fitAddonRef.current = null;
@@ -412,10 +422,12 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
         );
       }
     };
+    // All of these callbacks are stable (their dependency chains bottom out in
+    // refs), so this effect runs exactly once: the terminal and its PTY must
+    // never be torn down by a settings change.
   }, [
     handlePreflightCancel,
     handlePastedCommand,
-    onSessionChange,
     queueResize,
     sendResize,
     sendToPty,
