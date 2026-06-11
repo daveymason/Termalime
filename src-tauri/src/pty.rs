@@ -127,6 +127,8 @@ impl PtySession {
 impl Drop for PtySession {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        // Reap the child so it doesn't linger as a zombie process.
+        let _ = self.child.wait();
     }
 }
 

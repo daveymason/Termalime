@@ -78,14 +78,14 @@ PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:$PKG_CO
 3. Install the `.deb` locally:
 
 ```bash
-sudo apt install ./src-tauri/target/release/bundle/deb/Termalime_0.2.0_amd64.deb
+sudo apt install ./src-tauri/target/release/bundle/deb/Termalime_0.5.0_amd64.deb
 ```
 
 Artifacts land under `src-tauri/target/release/bundle/`:
 
-- `deb/Termalime_0.2.0_amd64.deb` → install with `apt`
-- `appimage/Termalime_0.2.0_amd64.AppImage` → `chmod +x` then run directly
-- `rpm/Termalime-0.2.0-1.x86_64.rpm` → for Fedora/RHEL friends
+- `deb/Termalime_0.5.0_amd64.deb` → install with `apt`
+- `appimage/Termalime_0.5.0_amd64.AppImage` → `chmod +x` then run directly
+- `rpm/Termalime-0.5.0-1.x86_64.rpm` → for Fedora/RHEL friends
 
 Adjust `bundle.targets` or metadata inside `src-tauri/tauri.conf.json` if you only need specific formats or want to bump versions.
 
@@ -114,6 +114,14 @@ Adjust `bundle.targets` or metadata inside `src-tauri/tauri.conf.json` if you on
   - Fixed sidebar command button integration to correctly run commands in PTY
   - Fixed saved commands panel form visibility toggling when typing new commands
   - Added export functionality for saved commands to clean `.txt` files
-- Termaline V0.4.0 is now available for testing on Windows and MacOSX. **Please note that this is an alpha version and may contain bugs**
+- Termaline V0.4.0 is now available for testing on Windows and MacOSX. 
 
-### V0.5 Planned - Codename: Eco
+### V0.5 Released - June 26 - Codename: Eco
+- New Features:
+  - Eco Impact Tracking: Displays CO₂ and water saved by using local LLMs instead of cloud APIs in the Context Bar and Settings
+  - Lifetime eco totals with per-session breakdown and reset functionality
+- Optimizations & Bug Fixes:
+  - Fixed terminal output freeze on large data transfers (UTF-8 boundary handling)
+  - Eliminated chat streaming duplication caused by leaked event listeners; major performance gain on long responses
+  - Optimized context polling and startup (git branch caching, targeted sysinfo refreshes, IPC batching)
+**Please note that this is an alpha version and may contain bugs**

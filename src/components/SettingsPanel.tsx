@@ -1,9 +1,10 @@
 import { MouseEvent, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Settings2, X } from "lucide-react";
+import { Check, Leaf, Settings2, X } from "lucide-react";
 import clsx from "clsx";
 import { invoke } from "@tauri-apps/api/core";
 import { PERSONA_DESCRIPTIONS, useSettings } from "../state/settings";
+import { formatCo2, formatEnergy, formatWater, useEco } from "../state/eco";
 
 const personaOrder = ["helpful", "concise", "neutral", "playful"] as const;
 
@@ -14,6 +15,7 @@ interface SettingsPanelProps {
 
 export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const { settings, updateSettings, resetSettings } = useSettings();
+  const { session, lifetime, resetLifetime } = useEco();
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -192,6 +194,43 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 rows={4}
                 onChange={(event) => updateSettings({ systemPrompt: event.currentTarget.value })}
               />
+            </section>
+
+            <section className="settings-section">
+              <div className="settings-section__label">
+                <p>
+                  <Leaf size={14} style={{ verticalAlign: "-2px", marginRight: "0.35rem" }} />
+                  Eco impact
+                </p>
+                <span>
+                  Estimated savings from answering prompts locally instead of calling a cloud LLM.
+                </span>
+              </div>
+              <div className="eco-stats">
+                <div className="eco-stat">
+                  <span className="eco-stat__value">{formatCo2(lifetime.co2G)}</span>
+                  <span className="eco-stat__label">CO₂ saved (all time)</span>
+                </div>
+                <div className="eco-stat">
+                  <span className="eco-stat__value">{formatWater(lifetime.waterMl)}</span>
+                  <span className="eco-stat__label">Water saved (all time)</span>
+                </div>
+                <div className="eco-stat">
+                  <span className="eco-stat__value">{formatEnergy(lifetime.energyWh)}</span>
+                  <span className="eco-stat__label">Energy saved (all time)</span>
+                </div>
+                <div className="eco-stat">
+                  <span className="eco-stat__value">{lifetime.requests}</span>
+                  <span className="eco-stat__label">Local requests</span>
+                </div>
+              </div>
+              <p className="settings-hint">
+                This session: {formatCo2(session.co2G)} CO₂, {formatWater(session.waterMl)} water
+                across {session.requests} requests.
+              </p>
+              <button className="text-btn" onClick={resetLifetime}>
+                Reset eco totals
+              </button>
             </section>
 
             <footer className="settings-panel__footer">
