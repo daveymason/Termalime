@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import "./App.css";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import Chatbot from "./components/Chatbot";
-import Terminal from "./components/Terminal";
+import TerminalTabs from "./components/TerminalTabs";
 import { SettingsPanel } from "./components/SettingsPanel";
 import ContextBar from "./components/ContextBar";
 import { useSettings } from "./state/settings";
@@ -38,7 +38,7 @@ function App() {
           style={{ height: "100%", width: "100%" }}
         >
           <Panel minSize={terminalMin} defaultSize={terminalDefault} order={1}>
-            <Terminal onSessionChange={setTerminalSessionId} />
+            <TerminalTabs onActiveSessionChange={setTerminalSessionId} />
           </Panel>
           {settings.showChat && (
             <>

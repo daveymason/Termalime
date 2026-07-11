@@ -95,6 +95,86 @@ body {
   backdrop-filter: blur(18px);
 }
 
+.terminal-tabs {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.terminal-tabs__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: none;
+  overflow-x: auto;
+  padding: 0.1rem 0.1rem 0;
+  scrollbar-width: thin;
+}
+
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.32rem 0.75rem;
+  border-radius: 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.6);
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.terminal-tab:hover {
+  color: rgba(255, 255, 255, 0.85);
+  border-color: rgba(0, 255, 149, 0.25);
+}
+
+.terminal-tab--active {
+  background: rgba(0, 255, 145, 0.12);
+  border-color: rgba(0, 255, 149, 0.35);
+  color: #d9ffe9;
+}
+
+.terminal-tab--add {
+  padding: 0.32rem 0.5rem;
+}
+
+.terminal-tab__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  opacity: 0.55;
+}
+
+.terminal-tab__close:hover {
+  opacity: 1;
+  color: #f87171;
+}
+
+.terminal-tabs__panes {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Inactive panes stay mounted but invisible: visibility (not display) keeps
+   their layout size so xterm's fit/resize stays in sync with the PTY. */
+.terminal-tabs__pane {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+}
+
+.terminal-tabs__pane--active {
+  visibility: visible;
+}
+
 .panel-header {
   display: flex;
   justify-content: space-between;

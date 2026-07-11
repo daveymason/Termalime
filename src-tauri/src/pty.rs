@@ -168,3 +168,74 @@ impl From<&PtySize> for RawPtySize {
         (*value).into()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_size_is_a_standard_terminal() {
+        let size = PtySize::default();
+        assert_eq!(size.cols, 80);
+        assert_eq!(size.rows, 24);
+    }
+
+    #[test]
+    fn size_converts_to_portable_pty_size() {
+        let size = PtySize {
+            cols: 120,
+            rows: 40,
+            pixel_width: 960,
+            pixel_height: 800,
+        };
+        let raw: RawPtySize = size.into();
+        assert_eq!(raw.cols, 120);
+        assert_eq!(raw.rows, 40);
+        assert_eq!(raw.pixel_width, 960);
+        assert_eq!(raw.pixel_height, 800);
+    }
+
+    #[test]
+    fn registry_rejects_unknown_sessions() {
+        let registry = PtyRegistry::default();
+        assert!(registry.with_session("missing-id", |_| Ok(())).is_err());
+        assert!(registry.take_reader("missing-id").is_err());
+    }
+
+    #[test]
+    fn registry_spawns_writes_and_closes_sessions() {
+        let registry = PtyRegistry::default();
+        let id = registry
+            .create_session(PtySize::default(), Some("/bin/sh"))
+            .expect("should spawn a shell session");
+        assert!(!id.is_empty());
+
+        // Each spawn gets a unique id so tabs never collide.
+        let second = registry
+            .create_session(PtySize::default(), Some("/bin/sh"))
+            .expect("should spawn a second session");
+        assert_ne!(id, second);
+
+        registry
+            .with_session(&id, |session| session.write(b"true\n"))
+            .expect("should write to the session");
+        registry
+            .with_session(&id, |session| {
+                session.resize(PtySize {
+                    cols: 100,
+                    rows: 30,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+            })
+            .expect("should resize the session");
+
+        // The reader can only be taken once per session.
+        assert!(registry.take_reader(&id).is_ok());
+        assert!(registry.take_reader(&id).is_err());
+
+        registry.remove_session(&id);
+        registry.remove_session(&second);
+        assert!(registry.with_session(&id, |_| Ok(())).is_err());
+    }
+}

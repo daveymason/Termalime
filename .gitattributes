@@ -1,2 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# The webview frontend is presentation code for the Tauri shell; exclude it
+src/** linguist-detectable=false
+vite.config.ts linguist-detectable=false
+tailwind.config.js linguist-detectable=false
+postcss.config.js linguist-detectable=false

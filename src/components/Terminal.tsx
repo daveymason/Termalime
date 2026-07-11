@@ -33,9 +33,11 @@ const terminalTheme: ITerminalOptions["theme"] = {
 
 type TerminalProps = {
   onSessionChange?: (sessionId: string | null) => void;
+  /** Whether this terminal is the visible tab; inactive tabs stay mounted but ignore app-wide commands. */
+  active?: boolean;
 };
 
-const Terminal = ({ onSessionChange }: TerminalProps) => {
+const Terminal = ({ onSessionChange, active = true }: TerminalProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -53,6 +55,7 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
   });
   const preflightStatusRef = useRef<PreflightStatus>("hidden");
   const pendingPreflightActionRef = useRef<(() => void) | null>(null);
+  const activeRef = useRef(active);
 
   useEffect(() => {
     preflightEnabledRef.current = settings.preflightCheck;
@@ -102,6 +105,15 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
       sendResize().catch((error) => console.error(error));
     });
   }, [sendResize]);
+
+  useEffect(() => {
+    activeRef.current = active;
+    if (active) {
+      // Regaining the foreground tab: re-sync dimensions and take keyboard focus.
+      queueResize();
+      termRef.current?.focus();
+    }
+  }, [active, queueResize]);
 
   const sendToPty = useCallback((payload: string) => {
     const id = sessionIdRef.current;
@@ -283,6 +295,10 @@ const Terminal = ({ onSessionChange }: TerminalProps) => {
 
   useEffect(() => {
     const handleRunCommand = (event: Event) => {
+      if (!activeRef.current) {
+        // Only the visible tab should execute app-wide command requests.
+        return;
+      }
       const customEvent = event as CustomEvent<string>;
       const command = customEvent.detail;
       if (!command) {
