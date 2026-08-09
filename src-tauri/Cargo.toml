@@ -1,6 +1,6 @@
 [package]
 name = "Termalime"
-version = "0.5.0"
+version = "0.5.2"
 description = "A Terminal with an Ollama Co-Pilot"
 authors = ["Davey Mason"]
 edition = "2021"
