@@ -2,10 +2,13 @@ import clsx from "clsx";
 import ReactMarkdown from "react-markdown";
 import {
   Bot,
+  Check,
   Copy,
   Loader2,
+  Play,
   RefreshCcw,
   SendHorizonal,
+  TerminalSquare,
   Trash2,
   UserRound,
   WifiOff,
@@ -44,7 +47,6 @@ const formatTimestamp = (value: number) =>
     minute: "2-digit",
   }).format(value);
 
-
 interface ChatbotProps {
   sessionId?: string | null;
 }
@@ -53,6 +55,96 @@ type MessageItemProps = {
   message: ChatMessage;
   onCopy: (message: ChatMessage) => void;
   onDelete: (messageId: string) => void;
+};
+
+type CodeBlockProps = React.HTMLAttributes<HTMLElement> & {
+  className?: string;
+  children?: React.ReactNode;
+};
+
+const CodeBlock = ({ className, children, ...props }: CodeBlockProps) => {
+  const [copied, setCopied] = useState(false);
+  const match = /language-(\w+)/.exec(className || "");
+  const rawText = String(children ?? "").replace(/\n$/, "");
+  const isInline = !match && !rawText.includes("\n");
+
+  if (isInline) {
+    return (
+      <code className="chat-inline-code" {...props}>
+        {children}
+      </code>
+    );
+  }
+
+  const lang = match ? match[1] : "sh";
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(rawText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy code snippet", err);
+    }
+  };
+
+  const handleRun = () => {
+    window.dispatchEvent(
+      new CustomEvent("termalime:run-command", { detail: rawText.trim() })
+    );
+  };
+
+  const handleInsert = () => {
+    window.dispatchEvent(
+      new CustomEvent("termalime:insert-command", { detail: rawText.trim() })
+    );
+  };
+
+  return (
+    <div className="chat-code-block">
+      <div className="chat-code-block__header">
+        <span className="chat-code-block__lang">{lang}</span>
+        <div className="chat-code-block__actions">
+          <button
+            type="button"
+            className="chat-code-btn"
+            onClick={handleCopy}
+            title="Copy command snippet"
+          >
+            {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+            <span>{copied ? "Copied" : "Copy"}</span>
+          </button>
+          <button
+            type="button"
+            className="chat-code-btn"
+            onClick={handleInsert}
+            title="Insert into active terminal at prompt"
+          >
+            <TerminalSquare size={12} />
+            <span>Insert</span>
+          </button>
+          <button
+            type="button"
+            className="chat-code-btn chat-code-btn--run"
+            onClick={handleRun}
+            title="Run command in terminal (guarded by Preflight)"
+          >
+            <Play size={12} />
+            <span>Run</span>
+          </button>
+        </div>
+      </div>
+      <pre className="chat-code-block__pre">
+        <code className={className} {...props}>
+          {children}
+        </code>
+      </pre>
+    </div>
+  );
+};
+
+const markdownComponents = {
+  code: CodeBlock,
 };
 
 const MessageItem = memo(({ message, onCopy, onDelete }: MessageItemProps) => (
@@ -86,7 +178,7 @@ const MessageItem = memo(({ message, onCopy, onDelete }: MessageItemProps) => (
     <div className="chat-message__content">
       {message.role === "assistant" ? (
         <div className="chat-markdown">
-          <ReactMarkdown>
+          <ReactMarkdown components={markdownComponents}>
             {message.content || (message.pending ? "…" : "")}
           </ReactMarkdown>
         </div>
@@ -339,8 +431,9 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     bottomRef.current?.scrollIntoView({ behavior: isStreaming ? "auto" : "smooth" });
   }, [messages, isStreaming]);
 
-  const sendPrompt = useCallback(async () => {
-    const trimmed = input.trim();
+  const sendPrompt = useCallback(async (customPrompt?: string) => {
+    const rawPrompt = typeof customPrompt === "string" ? customPrompt : input;
+    const trimmed = rawPrompt.trim();
     if (!trimmed || isStreaming) {
       return;
     }
@@ -380,7 +473,9 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     responseIdRef.current = assistantMessage.id;
     responseBufferRef.current = "";
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
-    setInput("");
+    if (!customPrompt) {
+      setInput("");
+    }
     setIsStreaming(true);
     setChatError(null);
 
@@ -459,6 +554,23 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     sessionId,
     settings,
   ]);
+
+  useEffect(() => {
+    const handleAskAssistant = (event: Event) => {
+      const custom = event as CustomEvent<{ prompt: string; autoSend?: boolean }>;
+      if (custom.detail?.prompt) {
+        if (custom.detail.autoSend !== false) {
+          void sendPrompt(custom.detail.prompt);
+        } else {
+          setInput(custom.detail.prompt);
+        }
+      }
+    };
+    window.addEventListener("termalime:ask-assistant", handleAskAssistant);
+    return () => {
+      window.removeEventListener("termalime:ask-assistant", handleAskAssistant);
+    };
+  }, [sendPrompt]);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();

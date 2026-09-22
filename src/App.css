@@ -1545,3 +1545,175 @@ body {
   font-size: 0.72rem;
   color: rgba(180, 230, 220, 0.65);
 }
+
+/* Bridge release (v0.6) */
+/* 1. Interactive Chat Code Blocks */
+.chat-code-block {
+  margin: 0.6rem 0;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(3, 7, 18, 0.65);
+  overflow: hidden;
+}
+
+.chat-code-block__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.3rem 0.6rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.chat-code-block__lang {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.chat-code-block__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.chat-code-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.22rem 0.5rem;
+  border-radius: 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.72rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.chat-code-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.chat-code-btn--run {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #6ee7b7;
+}
+
+.chat-code-btn--run:hover {
+  background: rgba(16, 185, 129, 0.28);
+  border-color: rgba(16, 185, 129, 0.55);
+  color: #a7f3d0;
+}
+
+.chat-code-block__pre {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  overflow-x: auto;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #f1f5f9;
+}
+
+.chat-inline-code {
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.3rem;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.82em;
+  color: #a7f3d0;
+}
+
+/* 2. Terminal Search Bar Overlay */
+.terminal-search-bar {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.45rem;
+  border-radius: 0.55rem;
+  background: rgba(10, 14, 23, 0.92);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 12px rgba(16, 185, 129, 0.12);
+  backdrop-filter: blur(10px);
+}
+
+.terminal-search-bar__icon {
+  color: rgba(255, 255, 255, 0.45);
+  margin-left: 0.2rem;
+}
+
+.terminal-search-bar__input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #fff;
+  font-size: 0.78rem;
+  font-family: inherit;
+  width: 140px;
+  padding: 0.2rem 0.3rem;
+}
+
+.terminal-search-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 0.35rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+  transition: all 120ms ease;
+}
+
+.terminal-search-bar__btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.terminal-search-bar__btn--active {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+/* 3. ContextBar Highlight Button (Explain) */
+.context-btn--highlight {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #6ee7b7;
+}
+
+.context-btn--highlight:hover {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: rgba(16, 185, 129, 0.5);
+  color: #a7f3d0;
+}
+
+/* 4. Tab Rename Input */
+.terminal-tab__rename-input {
+  background: transparent;
+  border: 1px solid rgba(16, 185, 129, 0.5);
+  border-radius: 0.25rem;
+  color: #d9ffe9;
+  font-family: inherit;
+  font-size: 0.8rem;
+  padding: 0 0.25rem;
+  outline: none;
+  width: 80px;
+}

@@ -3,7 +3,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal as XTerm, type ITerminalOptions } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
+import { SearchAddon } from "@xterm/addon-search";
+import {
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  Search,
+  ShieldAlert,
+  ShieldCheck,
+  X,
+} from "lucide-react";
+import clsx from "clsx";
 import "@xterm/xterm/css/xterm.css";
 import { useSettings } from "../state/settings";
 import PreflightModal, { PreflightStatus } from "./PreflightModal";
@@ -35,16 +45,18 @@ type TerminalProps = {
   onSessionChange?: (sessionId: string | null) => void;
   /** Whether this terminal is the visible tab; inactive tabs stay mounted but ignore app-wide commands. */
   active?: boolean;
+  initialCwd?: string | null;
 };
 
-const Terminal = ({ onSessionChange, active = true }: TerminalProps) => {
+const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const searchAddonRef = useRef<SearchAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const [status, setStatus] = useState<TerminalStatus>("connecting");
-  const { settings } = useSettings();
+  const { settings, updateSettings } = useSettings();
   const commandBufferRef = useRef<string>("");
   const preflightEnabledRef = useRef(settings.preflightCheck);
   const preflightModelRef = useRef(settings.preflightModel);
@@ -56,6 +68,12 @@ const Terminal = ({ onSessionChange, active = true }: TerminalProps) => {
   const preflightStatusRef = useRef<PreflightStatus>("hidden");
   const pendingPreflightActionRef = useRef<(() => void) | null>(null);
   const activeRef = useRef(active);
+
+  // In-buffer search state
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchCaseSensitive, setSearchCaseSensitive] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     preflightEnabledRef.current = settings.preflightCheck;
@@ -293,6 +311,65 @@ const Terminal = ({ onSessionChange, active = true }: TerminalProps) => {
     [sendToPty, startPreflightCheck, updateCommandBuffer],
   );
 
+  const handleExplainTerminal = useCallback(async () => {
+    const id = sessionIdRef.current;
+    if (!id) return;
+    try {
+      const context = await invoke<TerminalOutputPayload & { last_lines: string }>("get_terminal_context", {
+        session_id: id,
+        max_lines: 40,
+      });
+      const lines = context.last_lines?.trim();
+      if (!lines) return;
+
+      if (!settings.showChat) {
+        updateSettings({ showChat: true });
+      }
+
+      const prompt = `Please analyze the following recent terminal output. Explain any errors or failure causes, and provide the exact command to fix or proceed:\n\n\`\`\`\n${lines}\n\`\`\``;
+      window.dispatchEvent(
+        new CustomEvent("termalime:ask-assistant", {
+          detail: { prompt, autoSend: true },
+        })
+      );
+    } catch (err) {
+      console.error("Failed to fetch terminal context for explanation", err);
+    }
+  }, [settings.showChat, updateSettings]);
+
+  const findNext = useCallback(() => {
+    if (!searchQuery) return;
+    searchAddonRef.current?.findNext(searchQuery, {
+      caseSensitive: searchCaseSensitive,
+      incremental: false,
+    });
+  }, [searchQuery, searchCaseSensitive]);
+
+  const findPrevious = useCallback(() => {
+    if (!searchQuery) return;
+    searchAddonRef.current?.findPrevious(searchQuery, {
+      caseSensitive: searchCaseSensitive,
+    });
+  }, [searchQuery, searchCaseSensitive]);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    searchAddonRef.current?.clearDecorations();
+    termRef.current?.focus();
+  }, []);
+
+  const handleSearchChange = (val: string) => {
+    setSearchQuery(val);
+    if (val) {
+      searchAddonRef.current?.findNext(val, {
+        caseSensitive: searchCaseSensitive,
+        incremental: true,
+      });
+    } else {
+      searchAddonRef.current?.clearDecorations();
+    }
+  };
+
   useEffect(() => {
     const handleRunCommand = (event: Event) => {
       if (!activeRef.current) {
@@ -325,11 +402,31 @@ const Terminal = ({ onSessionChange, active = true }: TerminalProps) => {
       startPreflightCheck(trimmed, forwardToPty);
     };
 
+    const handleInsertCommand = (event: Event) => {
+      if (!activeRef.current) return;
+      const customEvent = event as CustomEvent<string>;
+      const command = customEvent.detail;
+      if (!command) return;
+      updateCommandBuffer(command);
+      sendToPty(command);
+      termRef.current?.focus();
+    };
+
+    const handleExplainEvent = () => {
+      if (activeRef.current) {
+        void handleExplainTerminal();
+      }
+    };
+
     window.addEventListener("termalime:run-command", handleRunCommand);
+    window.addEventListener("termalime:insert-command", handleInsertCommand);
+    window.addEventListener("termalime:explain-terminal", handleExplainEvent);
     return () => {
       window.removeEventListener("termalime:run-command", handleRunCommand);
+      window.removeEventListener("termalime:insert-command", handleInsertCommand);
+      window.removeEventListener("termalime:explain-terminal", handleExplainEvent);
     };
-  }, [sendToPty, startPreflightCheck, updateCommandBuffer]);
+  }, [handleExplainTerminal, sendToPty, startPreflightCheck, updateCommandBuffer]);
 
   useEffect(() => {
     let active = true;
@@ -346,9 +443,29 @@ const Terminal = ({ onSessionChange, active = true }: TerminalProps) => {
       theme: terminalTheme,
     });
     const fitAddon = new FitAddon();
+    const searchAddon = new SearchAddon();
     term.loadAddon(fitAddon);
+    term.loadAddon(searchAddon);
     termRef.current = term;
     fitAddonRef.current = fitAddon;
+    searchAddonRef.current = searchAddon;
+
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type === "keydown") {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+          event.preventDefault();
+          setSearchOpen(true);
+          setTimeout(() => searchInputRef.current?.focus(), 50);
+          return false;
+        }
+        if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "e") {
+          event.preventDefault();
+          void handleExplainTerminal();
+          return false;
+        }
+      }
+      return true;
+    });
 
     if (containerRef.current) {
       term.open(containerRef.current);
@@ -393,7 +510,9 @@ const Terminal = ({ onSessionChange, active = true }: TerminalProps) => {
     const connect = async () => {
       setStatus("connecting");
       try {
-        const id = await invoke<string>("spawn_pty");
+        const id = await invoke<string>("spawn_pty", {
+          request: initialCwd ? { cwd: initialCwd } : undefined,
+        });
         if (!active) {
           invoke("close_pty", { session_id: id }).catch((err) =>
             console.error("Failed to close PTY session:", err)
@@ -430,11 +549,12 @@ const Terminal = ({ onSessionChange, active = true }: TerminalProps) => {
       term.dispose();
       termRef.current = null;
       fitAddonRef.current = null;
+      searchAddonRef.current = null;
       sessionIdRef.current = null;
       
       if (spawnedSessionId) {
-        invoke("close_pty", { session_id: spawnedSessionId }).catch((err) =>
-          console.error("Failed to close PTY session:", err)
+        invoke("close_pty", { session_id: spawnedSessionId }).catch((error) =>
+          console.error("Failed to close PTY session on unmount", error),
         );
       }
     };
@@ -527,6 +647,64 @@ const Terminal = ({ onSessionChange, active = true }: TerminalProps) => {
         </header>
       )}
       <div className="panel-content panel-content--terminal">
+        {searchOpen && (
+          <div className="terminal-search-bar" role="search">
+            <Search size={13} className="terminal-search-bar__icon" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              className="terminal-search-bar__input"
+              placeholder="Find in terminal..."
+              value={searchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (e.shiftKey) findPrevious();
+                  else findNext();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  closeSearch();
+                }
+              }}
+            />
+            <button
+              type="button"
+              className={clsx(
+                "terminal-search-bar__btn",
+                searchCaseSensitive && "terminal-search-bar__btn--active"
+              )}
+              onClick={() => setSearchCaseSensitive(!searchCaseSensitive)}
+              title="Match Case"
+            >
+              Aa
+            </button>
+            <button
+              type="button"
+              className="terminal-search-bar__btn"
+              onClick={findPrevious}
+              title="Previous Match (Shift+Enter)"
+            >
+              <ChevronUp size={13} />
+            </button>
+            <button
+              type="button"
+              className="terminal-search-bar__btn"
+              onClick={findNext}
+              title="Next Match (Enter)"
+            >
+              <ChevronDown size={13} />
+            </button>
+            <button
+              type="button"
+              className="terminal-search-bar__btn"
+              onClick={closeSearch}
+              title="Close (Escape)"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
         <div ref={containerRef} className="terminal-host" />
         {status === "error" && (
           <div className="panel-overlay panel-overlay--error">
