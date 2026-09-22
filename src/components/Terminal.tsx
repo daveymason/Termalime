@@ -312,18 +312,50 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
   );
 
   const handleExplainTerminal = useCallback(async () => {
-    const id = sessionIdRef.current;
-    if (!id) return;
     try {
-      const context = await invoke<TerminalOutputPayload & { last_lines: string }>("get_terminal_context", {
-        session_id: id,
-        max_lines: 40,
-      });
-      const lines = context.last_lines?.trim();
-      if (!lines) return;
+      // 1. First priority: any text currently highlighted/selected by the user
+      let lines = termRef.current?.getSelection()?.trim() || "";
+
+      // 2. Second priority: rendered visible lines directly from active xterm buffer
+      if (!lines && termRef.current) {
+        const buf = termRef.current.buffer.active;
+        const totalRows = buf.baseY + buf.cursorY;
+        const collected: string[] = [];
+        const start = Math.max(0, totalRows - 40);
+        for (let y = start; y <= totalRows; y++) {
+          const line = buf.getLine(y);
+          if (line) {
+            const str = line.translateToString(true);
+            if (str.trim().length > 0) {
+              collected.push(str);
+            }
+          }
+        }
+        lines = collected.slice(-30).join("\n").trim();
+      }
+
+      // 3. Third priority: backend snapshot context
+      const id = sessionIdRef.current;
+      if (!lines && id) {
+        try {
+          const context = await invoke<{ session_id: string; last_lines: string }>("get_terminal_context", {
+            session_id: id,
+            max_lines: 40,
+          });
+          lines = context.last_lines?.trim() || "";
+        } catch (e) {
+          console.warn("Backend terminal context fallback error:", e);
+        }
+      }
+
+      if (!lines) {
+        lines = "No recent terminal output available to inspect.";
+      }
 
       if (!settings.showChat) {
         updateSettings({ showChat: true });
+        // Give React a frame to mount Chatbot if it was closed
+        await new Promise((resolve) => setTimeout(resolve, 150));
       }
 
       const prompt = `Please analyze the following recent terminal output. Explain any errors or failure causes, and provide the exact command to fix or proceed:\n\n\`\`\`\n${lines}\n\`\`\``;
@@ -370,6 +402,11 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
     }
   };
 
+  const handleExplainTerminalRef = useRef(handleExplainTerminal);
+  useEffect(() => {
+    handleExplainTerminalRef.current = handleExplainTerminal;
+  }, [handleExplainTerminal]);
+
   useEffect(() => {
     const handleRunCommand = (event: Event) => {
       if (!activeRef.current) {
@@ -412,9 +449,11 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
       termRef.current?.focus();
     };
 
-    const handleExplainEvent = () => {
-      if (activeRef.current) {
-        void handleExplainTerminal();
+    const handleExplainEvent = (event: Event) => {
+      const custom = event as CustomEvent<{ sessionId?: string | null }>;
+      const targetSession = custom?.detail?.sessionId;
+      if (targetSession ? targetSession === sessionIdRef.current : activeRef.current) {
+        void handleExplainTerminalRef.current();
       }
     };
 
@@ -426,7 +465,7 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
       window.removeEventListener("termalime:insert-command", handleInsertCommand);
       window.removeEventListener("termalime:explain-terminal", handleExplainEvent);
     };
-  }, [handleExplainTerminal, sendToPty, startPreflightCheck, updateCommandBuffer]);
+  }, [sendToPty, startPreflightCheck, updateCommandBuffer]);
 
   useEffect(() => {
     let active = true;
@@ -460,7 +499,7 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
         }
         if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "e") {
           event.preventDefault();
-          void handleExplainTerminal();
+          void handleExplainTerminalRef.current();
           return false;
         }
       }

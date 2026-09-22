@@ -610,7 +610,12 @@ body {
 }
 
 .model-select--compact select {
-  padding: 0.3rem 0.55rem;
+  padding: 0.25rem 0.5rem;
+  max-width: 120px;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 0.75rem;
 }
 
 .model-select select {

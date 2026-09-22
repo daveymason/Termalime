@@ -473,9 +473,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     responseIdRef.current = assistantMessage.id;
     responseBufferRef.current = "";
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
-    if (!customPrompt) {
-      setInput("");
-    }
+    setInput("");
     setIsStreaming(true);
     setChatError(null);
 
@@ -556,21 +554,46 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
   ]);
 
   useEffect(() => {
-    const handleAskAssistant = (event: Event) => {
+    const handleAskAssistant = async (event: Event) => {
       const custom = event as CustomEvent<{ prompt: string; autoSend?: boolean }>;
-      if (custom.detail?.prompt) {
-        if (custom.detail.autoSend !== false) {
-          void sendPrompt(custom.detail.prompt);
-        } else {
-          setInput(custom.detail.prompt);
+      const promptText = custom.detail?.prompt?.trim();
+      if (!promptText) return;
+
+      // Always populate the input field so user sees the prompt immediately
+      setInput(promptText);
+
+      // Auto-focus the chat input textarea
+      setTimeout(() => {
+        const textarea = document.querySelector<HTMLTextAreaElement>(".chat-input textarea");
+        textarea?.focus();
+      }, 50);
+
+      if (custom.detail?.autoSend !== false) {
+        // If no model is selected yet, try to select one from modelOptions or fetch models
+        let targetModel = modelRef.current;
+        if (!targetModel && modelOptions.length > 0) {
+          targetModel = modelOptions[0];
+          setModel(targetModel);
+        } else if (!targetModel) {
+          try {
+            const models = await invoke<string[]>("list_ollama_models");
+            if (models.length > 0) {
+              setModelOptions(models);
+              setModel(models[0]);
+              targetModel = models[0];
+            }
+          } catch {
+            // Error will be surfaced in sendPrompt
+          }
         }
+        void sendPrompt(promptText);
       }
     };
     window.addEventListener("termalime:ask-assistant", handleAskAssistant);
     return () => {
       window.removeEventListener("termalime:ask-assistant", handleAskAssistant);
     };
-  }, [sendPrompt]);
+  }, [modelOptions, sendPrompt]);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();

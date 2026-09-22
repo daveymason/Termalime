@@ -77,7 +77,7 @@ const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
         <CommandsButton onRunCommand={(cmd) => window.dispatchEvent(new CustomEvent("termalime:run-command", { detail: cmd }))} />
         <button
           className="context-btn context-btn--highlight"
-          onClick={() => window.dispatchEvent(new CustomEvent("termalime:explain-terminal"))}
+          onClick={() => window.dispatchEvent(new CustomEvent("termalime:explain-terminal", { detail: { sessionId } }))}
           title="Analyze terminal output & diagnose errors with Lime (Ctrl+Shift+E)"
         >
           <Sparkles size={14} />
