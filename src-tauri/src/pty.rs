@@ -20,8 +20,13 @@ pub struct PtyRegistry {
 
 impl PtyRegistry {
     /// Spawns a new PTY session and stores it in the registry.
-    pub fn create_session(&self, size: PtySize, shell: Option<&str>) -> Result<String> {
-        let session = PtySession::spawn(size, shell)?;
+    pub fn create_session(
+        &self,
+        size: PtySize,
+        shell: Option<&str>,
+        cwd: Option<&str>,
+    ) -> Result<String> {
+        let session = PtySession::spawn(size, shell, cwd)?;
         let id = session.id.clone();
         self.sessions
             .lock()
@@ -67,7 +72,7 @@ pub struct PtySession {
 }
 
 impl PtySession {
-    fn spawn(size: PtySize, shell: Option<&str>) -> Result<Self> {
+    fn spawn(size: PtySize, shell: Option<&str>, cwd: Option<&str>) -> Result<Self> {
         let shell_cmd = shell
             .map(String::from)
             .or_else(|| env::var("SHELL").ok())
@@ -81,6 +86,11 @@ impl PtySession {
         let mut cmd = CommandBuilder::new(shell_cmd);
         cmd.arg("-i");
         cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+
+        if let Some(dir) = cwd.filter(|d| !d.trim().is_empty()) {
+            cmd.cwd(dir);
+        }
 
         let child = pair
             .slave
@@ -206,13 +216,13 @@ mod tests {
     fn registry_spawns_writes_and_closes_sessions() {
         let registry = PtyRegistry::default();
         let id = registry
-            .create_session(PtySize::default(), Some("/bin/sh"))
+            .create_session(PtySize::default(), Some("/bin/sh"), None)
             .expect("should spawn a shell session");
         assert!(!id.is_empty());
 
         // Each spawn gets a unique id so tabs never collide.
         let second = registry
-            .create_session(PtySize::default(), Some("/bin/sh"))
+            .create_session(PtySize::default(), Some("/bin/sh"), None)
             .expect("should spawn a second session");
         assert_ne!(id, second);
 

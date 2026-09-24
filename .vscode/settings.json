@@ -1,0 +1,20 @@
+{
+  "rust-analyzer.server.path": "/home/adman-voids/.cargo/bin/rust-analyzer",
+  "rust-analyzer.linkedProjects": [
+    "./src-tauri/Cargo.toml"
+  ],
+  "rust-analyzer.cargo.extraEnv": {
+    "PKG_CONFIG_PATH": "/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+  },
+  "rust-analyzer.check.extraEnv": {
+    "PKG_CONFIG_PATH": "/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+  },
+  "rust-analyzer.check.overrideCommand": [
+    "cargo",
+    "check",
+    "--manifest-path",
+    "./src-tauri/Cargo.toml",
+    "--all-targets",
+    "--message-format=json"
+  ]
+}

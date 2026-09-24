@@ -228,11 +228,21 @@ struct WriteRequest {
     data: String,
 }
 
+#[derive(Deserialize, Default)]
+struct SpawnRequest {
+    cwd: Option<String>,
+}
+
 #[tauri::command]
-async fn spawn_pty(state: State<'_, AppState>, app_handle: AppHandle) -> Result<String, String> {
-    let (session_id, reader) = tauri::async_runtime::spawn_blocking(|| {
+async fn spawn_pty(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    request: Option<SpawnRequest>,
+) -> Result<String, String> {
+    let cwd = request.and_then(|r| r.cwd);
+    let (session_id, reader) = tauri::async_runtime::spawn_blocking(move || {
         let size = PtySize::default();
-        let session_id = PTY_REGISTRY.create_session(size, None)?;
+        let session_id = PTY_REGISTRY.create_session(size, None, cwd.as_deref())?;
         let reader = PTY_REGISTRY.take_reader(&session_id)?;
         Ok::<_, Error>((session_id, reader))
     })

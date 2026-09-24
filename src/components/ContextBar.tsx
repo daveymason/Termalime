@@ -9,6 +9,7 @@ import {
   Monitor,
   Network,
   Settings2,
+  Sparkles,
   Terminal as TerminalIcon,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -74,6 +75,14 @@ const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
           <span>Settings</span>
         </button>
         <CommandsButton onRunCommand={(cmd) => window.dispatchEvent(new CustomEvent("termalime:run-command", { detail: cmd }))} />
+        <button
+          className="context-btn context-btn--highlight"
+          onClick={() => window.dispatchEvent(new CustomEvent("termalime:explain-terminal", { detail: { sessionId } }))}
+          title="Analyze terminal output & diagnose errors with Lime (Ctrl+Shift+E)"
+        >
+          <Sparkles size={14} />
+          <span>Explain</span>
+        </button>
       </div>
 
       <div className="context-bar__divider" />
