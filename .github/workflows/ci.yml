@@ -2,11 +2,9 @@ name: CI — build tauri app
 
 on:
   push:
-    branches: [ main, v0.4-sustain, v0.6-bridge ]
+    branches: [ main ]
     tags:
       - 'v*'
-  pull_request:
-    branches: [ main, v0.4-sustain, v0.6-bridge ]
 
 jobs:
   build-tauri:
