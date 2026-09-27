@@ -34,6 +34,11 @@ The objective of v0.7 is to turn Termalime into an open **Model Context Protocol
 - [ ] `Escape` (when chat input is empty): Return focus to active terminal prompt.
 - [ ] `Ctrl + 1..9`: Switch between terminal tabs without clicking.
 
+### 6. Packaging & Delta Updates
+- [ ] Embed AppImage update information (`gh-releases-zsync|daveymason|Termalime|latest|Termalime_*_amd64.AppImage.zsync`) into AppImage build.
+- [ ] Publish `.zsync` files alongside release AppImages to enable delta updates via `AppImageUpdate` and catalog integrators (resolving AppImageHub warning).
+- [ ] Ensure appdata / AppStream metadata XML is bundled and placed in `usr/share/metainfo/` for software center integration.
+
 ---
 
 ## 🚀 Future Milestones

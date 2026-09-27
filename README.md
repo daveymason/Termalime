@@ -143,3 +143,7 @@ Adjust `bundle.targets` or metadata inside `src-tauri/tauri.conf.json` if you on
 - Adds a settings menu for Bot tweaking and visual settings
 
 **Please note that this is an alpha version and may contain bugs**
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
