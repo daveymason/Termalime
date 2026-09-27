@@ -34,10 +34,15 @@ The objective of v0.7 is to turn Termalime into an open **Model Context Protocol
 - [ ] `Escape` (when chat input is empty): Return focus to active terminal prompt.
 - [ ] `Ctrl + 1..9`: Switch between terminal tabs without clicking.
 
-### 6. Packaging & Delta Updates
-- [ ] Embed AppImage update information (`gh-releases-zsync|daveymason|Termalime|latest|Termalime_*_amd64.AppImage.zsync`) into AppImage build.
-- [ ] Publish `.zsync` files alongside release AppImages to enable delta updates via `AppImageUpdate` and catalog integrators (resolving AppImageHub warning).
-- [ ] Ensure appdata / AppStream metadata XML is bundled and placed in `usr/share/metainfo/` for software center integration.
+### 6. Packaging, Ubuntu App Center & Delta Updates
+- [ ] **Ubuntu App Center (Snapcraft)**:
+  - [ ] Create `snap/snapcraft.yaml` recipe for Termalime (desktop interfaces, `pty` access, `x11`/`wayland`).
+  - [ ] Register `termalime` name on [snapcraft.io](https://snapcraft.io).
+  - [ ] Add automated Snap build & publish action (`canonical/action-snapcraft`) to CI workflow for instant Ubuntu App Center updates.
+- [ ] **AppImage Enhancements**:
+  - [ ] Embed AppImage update information (`gh-releases-zsync|daveymason|Termalime|latest|Termalime_*_amd64.AppImage.zsync`) into AppImage build.
+  - [ ] Publish `.zsync` files alongside release AppImages to enable delta updates via `AppImageUpdate` and catalog integrators.
+  - [ ] Bundle AppStream metadata XML (`metainfo.xml`) in `usr/share/metainfo/` for rich software center descriptions and screenshots.
 
 ---
 
