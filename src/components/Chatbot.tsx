@@ -712,10 +712,24 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     const personaPrompt = `Persona directive: Adopt the ${settings.persona} persona – ${personaDescription}`;
     const systemPrompt = settings.systemPrompt?.trim();
 
+    const previousHistory = messages
+      .filter(
+        (m) =>
+          !m.pending &&
+          m.content.trim().length > 0 &&
+          (m.role === "user" || m.role === "assistant")
+      )
+      .slice(-16)
+      .map((m) => ({
+        role: m.role,
+        content: m.content.trim(),
+      }));
+
     const requestPayload: Record<string, unknown> = {
       prompt: trimmed,
       model,
       host: settings.ollamaHost,
+      history: previousHistory,
     };
 
     if (systemPrompt) {

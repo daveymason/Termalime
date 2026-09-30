@@ -289,6 +289,12 @@ struct ResizeRequest {
     pixel_height: Option<u16>,
 }
 
+#[derive(Deserialize, Clone)]
+struct ChatHistoryMessage {
+    role: String,
+    content: String,
+}
+
 #[derive(Deserialize)]
 struct AskOllamaRequest {
     prompt: String,
@@ -296,6 +302,7 @@ struct AskOllamaRequest {
     system_prompt: Option<String>,
     persona_prompt: Option<String>,
     terminal_context: Option<String>,
+    history: Option<Vec<ChatHistoryMessage>>,
     host: Option<String>,
 }
 
@@ -447,6 +454,7 @@ async fn ask_ollama(
         system_prompt,
         persona_prompt,
         terminal_context,
+        history,
         host,
     } = request;
     let model = model.unwrap_or_else(|| "llama3".to_string());
@@ -476,6 +484,19 @@ async fn ask_ollama(
             "role": "system",
             "content": persona_prompt,
         }));
+    }
+
+    if let Some(past_turns) = history {
+        for msg in past_turns {
+            let role = msg.role.trim().to_lowercase();
+            let content = msg.content.trim().to_string();
+            if !content.is_empty() && (role == "user" || role == "assistant") {
+                messages.push(json!({
+                    "role": role,
+                    "content": content,
+                }));
+            }
+        }
     }
 
     let user_prompt = if let Some(context) = terminal_context

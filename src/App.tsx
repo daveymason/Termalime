@@ -12,6 +12,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [terminalSessionId, setTerminalSessionId] = useState<string | null>(null);
   useEffect(() => {
+    document.title = "Termalime v0.7.0 — Protocol";
     const splash = document.getElementById("splash");
     if (!splash) return;
 

@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Termalime",
+        "title": "Termalime v0.7.0 — Protocol",
         "width": 1280,
         "height": 800,
         "minWidth": 1100,
