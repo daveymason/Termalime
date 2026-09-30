@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.termalime.Termalime</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Termalime</name>
+  <summary>A terminal emulator with an integrated local Ollama co-pilot and MCP client</summary>
+  
+  <description>
+    <p>
+      Termalime is a Tauri-powered desktop cockpit that fuses a full terminal emulator
+      with a local AI chat co-pilot. Built for developers who constantly bounce between
+      shell sessions and LLM prompts, everything lives in a unified split-pane workspace.
+    </p>
+    <p>Key highlights:</p>
+    <ul>
+      <li>Model Context Protocol (MCP) client core supporting stdio servers and automated tool discovery.</li>
+      <li>Local Provider Gateway with configurable Ollama host endpoint and zero cloud leakage.</li>
+      <li>Preflight safety engine that analyzes commands before execution to prevent accidental damage.</li>
+      <li>Performance telemetry displaying real-time generation speed (tok/s) and time-to-first-token (TTFT).</li>
+      <li>Targeted context chips allowing 1-click injection of last command output, git diff, or directory tree.</li>
+      <li>Eco-telemetry calculating estimated energy and water savings from local model execution.</li>
+    </ul>
+  </description>
+  
+  <launchable type="desktop-id">termalime.desktop</launchable>
+  
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/daveymason/Termalime/main/app-logo.png</image>
+      <caption>Termalime split-pane workspace with terminal and AI assistant</caption>
+    </screenshot>
+  </screenshots>
+  
+  <url type="homepage">https://termalime.com</url>
+  <url type="bugtracker">https://github.com/daveymason/Termalime/issues</url>
+  <url type="vcs-browser">https://github.com/daveymason/Termalime</url>
+  
+  <provides>
+    <binary>Termalime</binary>
+  </provides>
+  
+  <releases>
+    <release version="0.7.0" date="2026-09-30">
+      <description>
+        <p>Codename: Protocol. Introducing Model Context Protocol (MCP) support, configurable Ollama host gateway, performance telemetry (tok/s, TTFT), and targeted workspace context chips.</p>
+      </description>
+    </release>
+    <release version="0.6.1" date="2026-09-15">
+      <description>
+        <p>Bug fixes and terminal stability improvements.</p>
+      </description>
+    </release>
+    <release version="0.6.0" date="2026-09-01">
+      <description>
+        <p>Codename: Bridge. Interactive AI code block execution, error diagnosis, in-buffer search, and smart CWD inheritance.</p>
+      </description>
+    </release>
+  </releases>
+  
+  <content_rating type="oars-1.1" />
+  <developer id="daveymason">
+    <name>Davey Mason</name>
+  </developer>
+</component>

@@ -1,0 +1,83 @@
+name: termalime
+base: core24
+version: '0.7.0'
+summary: Terminal emulator with an integrated local Ollama co-pilot and MCP client
+description: |
+  Termalime is a modern desktop cockpit fusing a full-featured terminal emulator
+  with an AI chat console powered by local Ollama models and the Model Context Protocol (MCP).
+  Features include:
+  - Local AI co-pilot running entirely offline or via configurable LAN Ollama host.
+  - Model Context Protocol (MCP) client core for tool-use and workspace integration.
+  - Preflight security engine protecting your shell against risky commands.
+  - Real-time performance telemetry (tokens/sec, time-to-first-token).
+  - Targeted workspace context chips (Git diffs, last output, directory trees).
+
+grade: stable
+confinement: strict
+
+apps:
+  termalime:
+    command: bin/Termalime
+    desktop: usr/share/applications/termalime.desktop
+    extensions: [gnome]
+    plugs:
+      - desktop
+      - desktop-legacy
+      - wayland
+      - x11
+      - network
+      - network-bind
+      - home
+      - removable-media
+      - system-observe
+      - process-control
+
+parts:
+  termalime:
+    plugin: nil
+    build-packages:
+      - build-essential
+      - curl
+      - wget
+      - pkg-config
+      - libssl-dev
+      - libgtk-3-dev
+      - libwebkit2gtk-4.1-dev
+      - librsvg2-dev
+    stage-packages:
+      - libwebkit2gtk-4.1-0
+      - libgtk-3-0
+    override-build: |
+      # Install Node.js if not present
+      if ! command -v node > /dev/null; then
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        apt-get install -y nodejs
+      fi
+
+      # Install Rust if not present
+      if ! command -v cargo > /dev/null; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        export PATH="$HOME/.cargo/bin:$PATH"
+      fi
+
+      npm ci
+      npm run build
+      cargo build --manifest-path src-tauri/Cargo.toml --release
+
+      install -d $CRAFT_PART_INSTALL/bin
+      install -m 755 src-tauri/target/release/Termalime $CRAFT_PART_INSTALL/bin/Termalime
+
+      install -d $CRAFT_PART_INSTALL/usr/share/applications
+      install -d $CRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps
+      install -m 644 src-tauri/icons/icon.png $CRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps/termalime.png
+
+      cat <<EOF > $CRAFT_PART_INSTALL/usr/share/applications/termalime.desktop
+      [Desktop Entry]
+      Name=Termalime
+      Comment=A Terminal with an Ollama Co-Pilot and MCP Client
+      Exec=Termalime
+      Icon=termalime
+      Terminal=false
+      Type=Application
+      Categories=Development;TerminalEmulator;System;
+      EOF

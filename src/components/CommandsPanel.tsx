@@ -1,4 +1,5 @@
 import { MouseEvent, useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Download, Edit2, Play, Plus, Save, TerminalSquare, Trash2, X } from "lucide-react";
 import clsx from "clsx";
@@ -139,7 +140,7 @@ export function CommandsPanel({ open, onClose, onRunCommand }: CommandsPanelProp
     URL.revokeObjectURL(url);
   };
 
-  return (
+  const modal = (
     <AnimatePresence>
       {open && (
         <motion.div
@@ -278,6 +279,8 @@ export function CommandsPanel({ open, onClose, onRunCommand }: CommandsPanelProp
       )}
     </AnimatePresence>
   );
+
+  return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
 }
 
 interface CommandsButtonProps {

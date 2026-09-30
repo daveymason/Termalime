@@ -3,7 +3,11 @@ import ReactMarkdown from "react-markdown";
 import {
   Bot,
   Check,
+  ChevronDown,
+  ChevronRight,
   Copy,
+  FolderTree,
+  GitBranch,
   Loader2,
   Play,
   RefreshCcw,
@@ -17,8 +21,26 @@ import { FormEvent, KeyboardEvent, memo, useCallback, useEffect, useRef, useStat
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { PERSONA_DESCRIPTIONS, useSettings } from "../state/settings";
+import { ContextChipsState, DEFAULT_CONTEXT_CHIPS, gatherActiveContext } from "../state/context";
 
 type ChatRole = "user" | "assistant";
+
+export type TelemetryData = {
+  tokPerSec?: number;
+  evalCount?: number;
+  evalDurationMs?: number;
+  ttftMs?: number;
+  totalDurationMs?: number;
+};
+
+export type ToolExecution = {
+  id: string;
+  serverName: string;
+  toolName: string;
+  durationMs?: number;
+  status: "running" | "success" | "error";
+  details?: string;
+};
 
 type ChatMessage = {
   id: string;
@@ -27,12 +49,27 @@ type ChatMessage = {
   pending?: boolean;
   model?: string;
   timestamp: number;
+  telemetry?: TelemetryData;
+  toolCalls?: ToolExecution[];
+};
+
+type OllamaToolCall = {
+  function: {
+    name: string;
+    arguments: any;
+  };
 };
 
 type OllamaChunkPayload = {
   content?: string;
   done: boolean;
   error?: string;
+  eval_count?: number;
+  eval_duration?: number;
+  prompt_eval_count?: number;
+  prompt_eval_duration?: number;
+  total_duration?: number;
+  tool_calls?: OllamaToolCall[];
 };
 
 type TerminalContextPayload = {
@@ -147,50 +184,95 @@ const markdownComponents = {
   code: CodeBlock,
 };
 
-const MessageItem = memo(({ message, onCopy, onDelete }: MessageItemProps) => (
-  <article className={clsx("chat-message", `chat-message--${message.role}`)}>
-    <div className="chat-message__actions" aria-label="Message actions">
-      <button
-        type="button"
-        aria-label="Copy message"
-        title="Copy message"
-        onClick={() => onCopy(message)}
-        disabled={!message.content}
-      >
-        <Copy size={14} />
-      </button>
-      <button
-        type="button"
-        aria-label="Delete message"
-        title="Delete message"
-        onClick={() => onDelete(message.id)}
-      >
-        <Trash2 size={14} />
-      </button>
-    </div>
-    <header className="chat-message__meta">
-      {message.role === "assistant" ? <Bot size={14} /> : <UserRound size={14} />}
-      <span>
-        {message.role === "assistant" ? message.model ?? "Ollama" : "You"}
-      </span>
-      {message.pending && <span className="typing-dot">●</span>}
-    </header>
-    <div className="chat-message__content">
-      {message.role === "assistant" ? (
-        <div className="chat-markdown">
-          <ReactMarkdown components={markdownComponents}>
-            {message.content || (message.pending ? "…" : "")}
-          </ReactMarkdown>
+const MessageItem = memo(({ message, onCopy, onDelete }: MessageItemProps) => {
+  const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
+
+  const toggleTool = (id: string) => {
+    setExpandedTools((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  return (
+    <article className={clsx("chat-message", `chat-message--${message.role}`)}>
+      <div className="chat-message__actions" aria-label="Message actions">
+        <button
+          type="button"
+          aria-label="Copy message"
+          title="Copy message"
+          onClick={() => onCopy(message)}
+          disabled={!message.content}
+        >
+          <Copy size={14} />
+        </button>
+        <button
+          type="button"
+          aria-label="Delete message"
+          title="Delete message"
+          onClick={() => onDelete(message.id)}
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+      <header className="chat-message__meta">
+        {message.role === "assistant" ? <Bot size={14} /> : <UserRound size={14} />}
+        <span>
+          {message.role === "assistant" ? message.model ?? "Ollama" : "You"}
+        </span>
+        {message.pending && <span className="typing-dot">●</span>}
+      </header>
+
+      {/* Phase 2 & 3: MCP Tool Call Accordions */}
+      {message.toolCalls && message.toolCalls.length > 0 && (
+        <div className="tool-call-list">
+          {message.toolCalls.map((tool) => (
+            <div key={tool.id} className="tool-call-card">
+              <div className="tool-call-header" onClick={() => toggleTool(tool.id)}>
+                <span className="tool-call-title">
+                  {expandedTools[tool.id] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  <code>{tool.serverName}:{tool.toolName}</code>
+                </span>
+                <span className="tool-call-duration">
+                  {tool.durationMs != null ? `(${tool.durationMs}ms)` : `running…`}
+                </span>
+              </div>
+              {expandedTools[tool.id] && tool.details && (
+                <pre className="tool-call-details">{tool.details}</pre>
+              )}
+            </div>
+          ))}
         </div>
-      ) : (
-        <p>{message.content}</p>
       )}
-    </div>
-    <footer className="chat-message__meta-line">
-      <span>{formatTimestamp(message.timestamp)}</span>
-    </footer>
-  </article>
-));
+
+      <div className="chat-message__content">
+        {message.role === "assistant" ? (
+          <div className="chat-markdown">
+            <ReactMarkdown components={markdownComponents}>
+              {message.content || (message.pending ? "…" : "")}
+            </ReactMarkdown>
+          </div>
+        ) : (
+          <p>{message.content}</p>
+        )}
+      </div>
+      <footer className="chat-message__meta-line">
+        <span>{formatTimestamp(message.timestamp)}</span>
+        {message.telemetry && (
+          <span className="chat-telemetry">
+            {message.telemetry.tokPerSec != null && message.telemetry.tokPerSec > 0 && (
+              <span className="telemetry-badge telemetry-badge--toks" title="Generation speed">
+                ⚡ {message.telemetry.tokPerSec.toFixed(1)} tok/s
+              </span>
+            )}
+            {message.telemetry.ttftMs != null && message.telemetry.ttftMs > 0 && (
+              <span className="telemetry-badge" title="Time to first token">
+                {message.telemetry.ttftMs}ms TTFT
+              </span>
+            )}
+          </span>
+        )}
+      </footer>
+    </article>
+  );
+});
 
 MessageItem.displayName = "MessageItem";
 
@@ -204,8 +286,12 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
   const [loadingModels, setLoadingModels] = useState(false);
   const [ollamaOnline, setOllamaOnline] = useState<boolean | null>(null);
   const [checkingOllama, setCheckingOllama] = useState(false);
+  const [contextChips, setContextChips] = useState<ContextChipsState>(DEFAULT_CONTEXT_CHIPS);
   const responseIdRef = useRef<string | null>(null);
   const responseBufferRef = useRef<string>("");
+  const promptStartTimeRef = useRef<number>(0);
+  const firstTokenReceivedRef = useRef<boolean>(false);
+  const ttftMsRef = useRef<number | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef(model);
   const { settings } = useSettings();
@@ -263,7 +349,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
   const refreshModels = useCallback(async () => {
     setLoadingModels(true);
     try {
-      const models = await invoke<string[]>("list_ollama_models");
+      const models = await invoke<string[]>("list_ollama_models", { host: settings.ollamaHost });
       setModelOptions(models);
       if (models.length === 0) {
         setModel("");
@@ -288,15 +374,15 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     } finally {
       setLoadingModels(false);
     }
-  }, []);
+  }, [settings.ollamaHost]);
 
   const refreshHealth = useCallback(async (): Promise<boolean> => {
     setCheckingOllama(true);
     try {
-      const healthy = await invoke<boolean>("check_ollama");
+      const healthy = await invoke<boolean>("check_ollama", { host: settings.ollamaHost });
       setOllamaOnline(healthy);
       if (!healthy) {
-        setChatError("Ollama isn't responding on localhost:11434.");
+        setChatError(`Ollama isn't responding on ${settings.ollamaHost || "http://127.0.0.1:11434"}.`);
         return false;
       } else {
         setChatError((prev) => (prev?.includes("Ollama") ? null : prev));
@@ -308,13 +394,13 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
       setChatError(
         typeof error === "string"
           ? error
-          : "Couldn't reach Ollama on localhost:11434.",
+          : `Couldn't reach Ollama on ${settings.ollamaHost || "http://127.0.0.1:11434"}.`,
       );
       return false;
     } finally {
       setCheckingOllama(false);
     }
-  }, [refreshModels]);
+  }, [settings.ollamaHost, refreshModels]);
 
   const handleAssistantChunk = useCallback(
     (payload: OllamaChunkPayload) => {
@@ -345,9 +431,14 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
       if (payload.content && activeResponseId) {
         setChatError(null);
         setOllamaOnline(true);
-        const nextContent = responseBufferRef.current + payload.content;
+        if (!firstTokenReceivedRef.current && promptStartTimeRef.current > 0) {
+          firstTokenReceivedRef.current = true;
+          ttftMsRef.current = Date.now() - promptStartTimeRef.current;
+        }
 
+        const nextContent = responseBufferRef.current + payload.content;
         responseBufferRef.current = nextContent;
+
         setMessages((prev) =>
           prev.map((message) =>
             message.id === activeResponseId
@@ -361,7 +452,78 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
         );
       }
 
+      // Handle tool calls returned by model (Phase 3)
+      if (payload.tool_calls && payload.tool_calls.length > 0 && activeResponseId) {
+        for (const tc of payload.tool_calls) {
+          const rawName = tc.function.name;
+          const parts = rawName.split("__");
+          const serverName = parts[0] || "mcp";
+          const toolName = parts.slice(1).join("__") || rawName;
+          const toolCallId = createId();
+
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.id !== activeResponseId) return msg;
+              const existing = msg.toolCalls || [];
+              if (existing.some((t) => t.toolName === toolName && t.serverName === serverName)) {
+                return msg;
+              }
+              return {
+                ...msg,
+                toolCalls: [
+                  ...existing,
+                  {
+                    id: toolCallId,
+                    serverName,
+                    toolName,
+                    status: "running",
+                  },
+                ],
+              };
+            }),
+          );
+        }
+      }
+
       if (payload.done) {
+        let tokPerSec: number | undefined;
+        let evalDurationMs: number | undefined;
+        if (payload.eval_duration && payload.eval_count) {
+          const durationSec = payload.eval_duration / 1e9;
+          if (durationSec > 0) {
+            tokPerSec = payload.eval_count / durationSec;
+          }
+          evalDurationMs = Math.round(payload.eval_duration / 1e6);
+        }
+        const ttftMs =
+          ttftMsRef.current ??
+          (payload.prompt_eval_duration ? Math.round(payload.prompt_eval_duration / 1e6) : undefined);
+        const totalDurationMs = payload.total_duration
+          ? Math.round(payload.total_duration / 1e6)
+          : undefined;
+
+        const telemetry: TelemetryData = {
+          tokPerSec,
+          evalCount: payload.eval_count,
+          evalDurationMs,
+          ttftMs,
+          totalDurationMs,
+        };
+
+        if (activeResponseId) {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === activeResponseId
+                ? {
+                    ...msg,
+                    pending: false,
+                    telemetry,
+                  }
+                : msg,
+            ),
+          );
+        }
+
         responseIdRef.current = null;
         responseBufferRef.current = "";
         setIsStreaming(false);
@@ -401,6 +563,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
   useEffect(() => {
     let active = true;
     let unlisten: UnlistenFn | undefined;
+    let unlistenTool: UnlistenFn | undefined;
 
     const attach = async () => {
       const unsub = await listen<OllamaChunkPayload>("ollama-chunk", (event) => {
@@ -410,10 +573,46 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
         handleAssistantChunk(event.payload);
       });
 
+      const unsubTool = await listen<{
+        raw_name: string;
+        server_name: string;
+        tool_name: string;
+        duration_ms: number;
+        is_error: boolean;
+        content: string;
+      }>("mcp-tool-result", (event) => {
+        if (!active) return;
+        const data = event.payload;
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.toolCalls &&
+            msg.toolCalls.some(
+              (t) => t.toolName === data.tool_name || t.serverName === data.server_name
+            )
+              ? {
+                  ...msg,
+                  toolCalls: msg.toolCalls.map((t) =>
+                    t.toolName === data.tool_name || (t.serverName === data.server_name && t.status === "running")
+                      ? {
+                          ...t,
+                          durationMs: data.duration_ms,
+                          status: data.is_error ? "error" : "success",
+                          details: data.content,
+                        }
+                      : t,
+                  ),
+                }
+              : msg,
+          ),
+        );
+      });
+
       if (!active) {
         unsub();
+        unsubTool();
       } else {
         unlisten = unsub;
+        unlistenTool = unsubTool;
       }
     };
 
@@ -422,6 +621,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     return () => {
       active = false;
       unlisten?.();
+      unlistenTool?.();
     };
   }, [handleAssistantChunk]);
 
@@ -455,6 +655,10 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     }
 
     const timestamp = Date.now();
+    promptStartTimeRef.current = timestamp;
+    firstTokenReceivedRef.current = false;
+    ttftMsRef.current = null;
+
     const userMessage: ChatMessage = {
       id: createId(),
       role: "user",
@@ -493,6 +697,17 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
       }
     }
 
+    try {
+      const extraContext = await gatherActiveContext(sessionId, contextChips);
+      if (extraContext.trim()) {
+        terminalContext = terminalContext
+          ? `${terminalContext}\n\n${extraContext.trim()}`
+          : extraContext.trim();
+      }
+    } catch (error) {
+      console.warn("Unable to gather workspace context", error);
+    }
+
     const personaDescription = PERSONA_DESCRIPTIONS[settings.persona];
     const personaPrompt = `Persona directive: Adopt the ${settings.persona} persona – ${personaDescription}`;
     const systemPrompt = settings.systemPrompt?.trim();
@@ -500,6 +715,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     const requestPayload: Record<string, unknown> = {
       prompt: trimmed,
       model,
+      host: settings.ollamaHost,
     };
 
     if (systemPrompt) {
@@ -543,6 +759,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     }
   }, [
     checkingOllama,
+    contextChips,
     input,
     isStreaming,
     model,
@@ -724,6 +941,36 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
             />
           ))}
           <div ref={bottomRef} />
+        </div>
+
+        <div className="chat-context-chips">
+          <button
+            type="button"
+            className={clsx("chat-chip", contextChips.lastCommand && "chat-chip--active")}
+            onClick={() => setContextChips((prev) => ({ ...prev, lastCommand: !prev.lastCommand }))}
+            title="Attach output of the most recent terminal command"
+          >
+            <TerminalSquare size={12} />
+            <span>Last Output</span>
+          </button>
+          <button
+            type="button"
+            className={clsx("chat-chip", contextChips.gitStatus && "chat-chip--active")}
+            onClick={() => setContextChips((prev) => ({ ...prev, gitStatus: !prev.gitStatus }))}
+            title="Attach git status and working tree diff"
+          >
+            <GitBranch size={12} />
+            <span>Git Diff</span>
+          </button>
+          <button
+            type="button"
+            className={clsx("chat-chip", contextChips.cwdTree && "chat-chip--active")}
+            onClick={() => setContextChips((prev) => ({ ...prev, cwdTree: !prev.cwdTree }))}
+            title="Attach workspace directory structure"
+          >
+            <FolderTree size={12} />
+            <span>Directory Tree</span>
+          </button>
         </div>
 
         <form className="chat-input" onSubmit={handleSubmit}>

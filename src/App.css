@@ -881,7 +881,9 @@ body {
 
 /* Commands Panel */
 .commands-panel {
-  max-height: min(85vh, 640px);
+  width: min(580px, 94vw);
+  min-height: auto;
+  max-height: min(85vh, 620px);
 }
 
 .commands-footer-btn {
@@ -1093,25 +1095,88 @@ body {
   background: rgba(3, 5, 8, 0.75);
   backdrop-filter: blur(12px);
   display: flex;
-  align-items: flex-end;
-  justify-content: flex-start;
-  padding: 2rem;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
   z-index: 40;
 }
 
 .settings-panel {
-  width: min(540px, 100%);
-  max-height: min(90vh, 720px);
-  background: rgba(2, 8, 12, 0.95);
+  width: min(740px, 94vw);
+  max-height: min(88vh, 740px);
+  min-height: 360px;
+  height: auto;
+  background: rgba(3, 10, 14, 0.97);
   border-radius: 1.25rem;
   border: 1px solid rgba(45, 212, 191, 0.25);
-  padding: 1.75rem;
+  padding: 1.5rem 1.75rem;
   display: flex;
   flex-direction: column;
-  gap: 1.35rem;
+  gap: 1.1rem;
+  overflow: hidden;
+  box-shadow: 0 40px 90px rgba(0, 0, 0, 0.75), 0 0 50px rgba(45, 212, 191, 0.08);
+}
+
+.settings-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 0.5rem;
+}
+
+.settings-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.95rem;
+  font-size: 0.84rem;
+  font-weight: 500;
+  border-radius: 0.6rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+  transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.settings-tab:hover {
+  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.settings-tab--active {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.3);
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.12);
+}
+
+.settings-tab-badge {
+  font-size: 0.68rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 9999px;
+  background: rgba(52, 211, 153, 0.22);
+  color: #6ee7b7;
+  font-weight: 700;
+}
+
+.settings-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
   overflow-y: auto;
-  overscroll-behavior: contain;
-  box-shadow: 0 40px 90px rgba(0, 0, 0, 0.55);
+  padding-right: 0.4rem;
+  flex: 1;
+}
+
+.settings-tab-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.settings-tab-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
 }
 
 .settings-panel__header {
@@ -1721,4 +1786,363 @@ body {
   padding: 0 0.25rem;
   outline: none;
   width: 80px;
+}
+
+/* --- Phase 4: Targeted Context Chips --- */
+.chat-context-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem 0.2rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.chat-context-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 0.25rem 0.6rem;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.chat-chip:hover {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #a7f3d0;
+}
+
+.chat-chip--active {
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(16, 185, 129, 0.5);
+  color: #34d399;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.2);
+}
+
+/* --- Phase 2: Performance Telemetry Badges --- */
+.chat-telemetry {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.telemetry-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.68rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.3rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.telemetry-badge--toks {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.25);
+  background: rgba(52, 211, 153, 0.08);
+}
+
+/* --- Phase 2 & 3: Tool Call Display in Chat --- */
+.tool-call-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+
+.tool-call-card {
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(10, 16, 22, 0.6);
+  overflow: hidden;
+  font-size: 0.76rem;
+}
+
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.65rem;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tool-call-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 500;
+  color: #a7f3d0;
+  font-family: ui-monospace, monospace;
+}
+
+.tool-call-duration {
+  font-size: 0.68rem;
+  color: rgba(255, 255, 255, 0.4);
+  font-family: ui-monospace, monospace;
+}
+
+.tool-call-details {
+  padding: 0.5rem 0.65rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.2);
+  color: rgba(255, 255, 255, 0.8);
+  max-height: 160px;
+  overflow-y: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+}
+
+/* --- Phase 3: MCP Settings Panel & Presets --- */
+.settings-card {
+  background: rgba(8, 20, 26, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.9rem;
+  padding: 1.1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.settings-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.settings-card__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  margin: 0;
+}
+
+.settings-card__desc {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.mcp-intro-banner {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 78, 59, 0.2));
+  border: 1px solid rgba(52, 211, 153, 0.25);
+  border-radius: 0.85rem;
+  padding: 1rem 1.15rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+}
+
+.mcp-intro-banner__icon {
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 0.6rem;
+  background: rgba(16, 185, 129, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #34d399;
+  flex-shrink: 0;
+}
+
+.mcp-intro-banner__text h4 {
+  margin: 0 0 0.25rem;
+  font-size: 0.88rem;
+  color: #f8fafc;
+}
+
+.mcp-intro-banner__text p {
+  margin: 0;
+  font-size: 0.76rem;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.45;
+}
+
+.mcp-intro-banner__text code {
+  font-size: 0.72rem;
+  color: #6ee7b7;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.25rem;
+}
+
+.mcp-presets-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.mcp-presets-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.mcp-presets-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.65rem;
+}
+
+.mcp-preset-card {
+  background: rgba(15, 23, 30, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.75rem;
+  padding: 0.85rem 0.95rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: all 160ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mcp-preset-card:hover {
+  background: rgba(20, 30, 40, 0.85);
+  border-color: rgba(52, 211, 153, 0.3);
+  transform: translateY(-1px);
+}
+
+.mcp-preset-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mcp-preset-card__name {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.mcp-preset-card__desc {
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.35;
+  margin: 0;
+  flex: 1;
+}
+
+.mcp-preset-card__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 0.4rem;
+  padding: 0.25rem 0.55rem;
+  cursor: pointer;
+  align-self: flex-start;
+  transition: all 120ms ease;
+}
+
+.mcp-preset-card__btn:hover {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: rgba(16, 185, 129, 0.45);
+}
+
+.mcp-servers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.mcp-server-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 0.95rem;
+  border-radius: 0.75rem;
+  background: rgba(8, 20, 26, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: border-color 150ms ease;
+}
+
+.mcp-server-item:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.mcp-server-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 0.82rem;
+  overflow: hidden;
+}
+
+.mcp-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mcp-status--running {
+  background: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.8);
+}
+
+.mcp-status--stopped {
+  background: #64748b;
+}
+
+.mcp-status--error {
+  background: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.8);
+}
+
+.mcp-tool-count {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.12rem 0.45rem;
+  border-radius: 0.3rem;
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.mcp-server-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+.mcp-add-form {
+  padding: 1rem;
+  border-radius: 0.75rem;
+  background: rgba(10, 22, 30, 0.8);
+  border: 1px dashed rgba(52, 211, 153, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
 }

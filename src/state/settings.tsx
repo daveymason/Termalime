@@ -10,6 +10,7 @@ export interface Settings {
   persona: Persona;
   preflightCheck: boolean;
   preflightModel: string;
+  ollamaHost: string;
 }
 
 export const PERSONA_DESCRIPTIONS: Record<Persona, string> = {
@@ -28,6 +29,7 @@ export const DEFAULT_SETTINGS: Settings = {
   persona: "helpful",
   preflightCheck: false,
   preflightModel: "gemma3:270m",
+  ollamaHost: "http://127.0.0.1:11434",
 };
 
 interface SettingsContextValue {
@@ -55,6 +57,17 @@ function loadSettings(): Settings {
 
 export const SettingsProvider = ({ children }: { children: ReactNode }) => {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
+
+  useEffect(() => {
+    // Sync configured host with Tauri backend
+    if (settings.ollamaHost) {
+      import("@tauri-apps/api/core").then(({ invoke }) => {
+        invoke("set_ollama_host", { host: settings.ollamaHost }).catch((err) =>
+          console.warn("Failed to sync ollama host with backend", err)
+        );
+      });
+    }
+  }, [settings.ollamaHost]);
 
   useEffect(() => {
     // Debounced so typing in the system-prompt textarea doesn't hit

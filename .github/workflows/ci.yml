@@ -52,6 +52,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATE_INFORMATION: 'gh-releases-zsync|daveymason|Termalime|latest|Termalime_*_amd64.AppImage.zsync'
         with:
           tagName: v__VERSION__
           releaseName: 'Termalime v__VERSION__'
@@ -64,3 +65,21 @@ jobs:
         with:
           name: tauri-bundles-${{ matrix.platform }}
           path: src-tauri/target/release/bundle
+
+  build-snap:
+    name: Build Snap (Ubuntu App Center)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Snap Package
+        uses: snapcore/action-build@v3
+        id: snapcraft
+
+      - name: Upload Snap Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: termalime-snap
+          path: ${{ steps.snapcraft.outputs.snap }}
+

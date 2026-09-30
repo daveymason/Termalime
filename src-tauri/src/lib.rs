@@ -1,4 +1,5 @@
 pub mod pty;
+pub mod mcp;
 
 use std::{collections::HashMap, io::Read, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
@@ -50,10 +51,47 @@ static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
 
 type ReaderHandle = tauri::async_runtime::JoinHandle<()>;
 
+fn resolve_ollama_url(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return "http://127.0.0.1:11434".to_string();
+    }
+    let mut url = trimmed.to_string();
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        url = format!("http://{}", url);
+    }
+    url.trim_end_matches('/').to_string()
+}
+
+fn initial_ollama_host() -> String {
+    if let Ok(host) = std::env::var("OLLAMA_HOST") {
+        let trimmed = host.trim();
+        if !trimmed.is_empty() {
+            return resolve_ollama_url(trimmed);
+        }
+    }
+    "http://127.0.0.1:11434".to_string()
+}
+
 struct AppState {
     readers: Arc<Mutex<HashMap<String, ReaderHandle>>>,
     terminal_snapshots: Arc<Mutex<HashMap<String, TerminalSnapshot>>>,
     system_info: Arc<std::sync::Mutex<sysinfo::System>>,
+    ollama_host: Arc<tokio::sync::RwLock<String>>,
+    mcp_manager: mcp::McpManager,
+}
+
+impl AppState {
+    async fn get_ollama_host(&self) -> String {
+        self.ollama_host.read().await.clone()
+    }
+
+    async fn set_ollama_host(&self, host: &str) -> String {
+        let resolved = resolve_ollama_url(host);
+        let mut guard = self.ollama_host.write().await;
+        *guard = resolved.clone();
+        resolved
+    }
 }
 
 impl Default for AppState {
@@ -67,10 +105,44 @@ impl Default for AppState {
             readers: Default::default(),
             terminal_snapshots: Default::default(),
             system_info: Arc::new(std::sync::Mutex::new(sys)),
+            ollama_host: Arc::new(tokio::sync::RwLock::new(initial_ollama_host())),
+            mcp_manager: mcp::McpManager::default(),
         }
     }
 }
 
+fn strip_ansi_escapes(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_escape = false;
+    let mut in_bracket = false;
+
+    for c in input.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+            in_bracket = false;
+            continue;
+        }
+        if in_escape {
+            if c == '[' {
+                in_bracket = true;
+                continue;
+            }
+            if in_bracket {
+                if ('@'..='~').contains(&c) {
+                    in_escape = false;
+                    in_bracket = false;
+                }
+                continue;
+            }
+            in_escape = false;
+            continue;
+        }
+        if c != '\r' {
+            out.push(c);
+        }
+    }
+    out
+}
 
 #[derive(Default, Clone)]
 struct TerminalSnapshot {
@@ -97,6 +169,25 @@ impl TerminalSnapshot {
         let lines: Vec<&str> = self.buffer.lines().rev().take(limit).collect();
         lines.into_iter().rev().collect::<Vec<_>>().join("\n")
     }
+
+    fn extract_last_command_output(&self) -> String {
+        let clean = strip_ansi_escapes(&self.buffer);
+        let lines: Vec<&str> = clean.lines().collect();
+        if lines.is_empty() {
+            return String::new();
+        }
+        let mut end = lines.len();
+        while end > 0 && lines[end - 1].trim().is_empty() {
+            end -= 1;
+        }
+        if end == 0 {
+            return String::new();
+        }
+        let slice = &lines[..end];
+        let max_lines = 80;
+        let start = slice.len().saturating_sub(max_lines);
+        slice[start..].join("\n")
+    }
 }
 
 #[derive(Serialize)]
@@ -111,11 +202,29 @@ struct TerminalOutputPayload {
     data: String,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+struct OllamaToolCallFunction {
+    name: String,
+    #[serde(default)]
+    arguments: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct OllamaToolCall {
+    function: OllamaToolCallFunction,
+}
+
 #[derive(Serialize, Clone)]
 struct OllamaChunkPayload {
     content: Option<String>,
     done: bool,
     error: Option<String>,
+    eval_count: Option<u64>,
+    eval_duration: Option<u64>,
+    prompt_eval_count: Option<u64>,
+    prompt_eval_duration: Option<u64>,
+    total_duration: Option<u64>,
+    tool_calls: Option<Vec<OllamaToolCall>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -187,12 +296,14 @@ struct AskOllamaRequest {
     system_prompt: Option<String>,
     persona_prompt: Option<String>,
     terminal_context: Option<String>,
+    host: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct AnalyzeCommandRequest {
     command: String,
     model: Option<String>,
+    host: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -324,7 +435,11 @@ async fn close_pty(state: State<'_, AppState>, session_id: String) -> Result<(),
 }
 
 #[tauri::command]
-async fn ask_ollama(app_handle: AppHandle, request: AskOllamaRequest) -> Result<(), String> {
+async fn ask_ollama(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    request: AskOllamaRequest,
+) -> Result<(), String> {
     let client = HTTP_CLIENT.clone();
     let AskOllamaRequest {
         prompt,
@@ -332,8 +447,14 @@ async fn ask_ollama(app_handle: AppHandle, request: AskOllamaRequest) -> Result<
         system_prompt,
         persona_prompt,
         terminal_context,
+        host,
     } = request;
     let model = model.unwrap_or_else(|| "llama3".to_string());
+
+    let ollama_host = match host.as_deref() {
+        Some(h) if !h.trim().is_empty() => resolve_ollama_url(h),
+        _ => state.get_ollama_host().await,
+    };
 
     let mut messages = Vec::new();
 
@@ -374,46 +495,117 @@ async fn ask_ollama(app_handle: AppHandle, request: AskOllamaRequest) -> Result<
         "content": user_prompt,
     }));
 
-    let body = json!({
-        "model": model,
-        "messages": messages,
-        "stream": true
-    });
+    let tools_schema = state.mcp_manager.get_ollama_tools_schema().await;
 
-    let response = client
-        .post("http://127.0.0.1:11434/api/chat")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|err| err.to_string())?;
+    let max_tool_iterations = 4;
+    let mut iteration = 0;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let detail = response.text().await.unwrap_or_default();
-        let message = format!("Ollama responded with {}: {}", status, detail);
-        emit_ollama_chunk(
-            &app_handle,
-            OllamaChunkPayload {
-                content: None,
-                done: true,
-                error: Some(message.clone()),
-            },
-        );
-        return Err(message);
-    }
+    while iteration < max_tool_iterations {
+        iteration += 1;
 
-    let mut stream = response.bytes_stream();
-    let mut buffer: Vec<u8> = Vec::new();
+        let mut body = json!({
+            "model": model,
+            "messages": messages,
+            "stream": true
+        });
 
-    while let Some(chunk) = stream.next().await {
-        let data = chunk.map_err(|err| err.to_string())?;
-        buffer.extend_from_slice(&data);
-        process_ollama_buffer(&app_handle, &mut buffer)?;
-    }
+        if !tools_schema.is_empty() {
+            body["tools"] = json!(tools_schema);
+        }
 
-    if !buffer.is_empty() {
-        buffer.push(b'\n');
-        process_ollama_buffer(&app_handle, &mut buffer)?;
+        let chat_endpoint = format!("{}/api/chat", ollama_host);
+        let response = client
+            .post(&chat_endpoint)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let detail = response.text().await.unwrap_or_default();
+            let message = format!("Ollama responded with {}: {}", status, detail);
+            emit_ollama_chunk(
+                &app_handle,
+                OllamaChunkPayload {
+                    content: None,
+                    done: true,
+                    error: Some(message.clone()),
+                    eval_count: None,
+                    eval_duration: None,
+                    prompt_eval_count: None,
+                    prompt_eval_duration: None,
+                    total_duration: None,
+                    tool_calls: None,
+                },
+            );
+            return Err(message);
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut collected_tool_calls: Vec<OllamaToolCall> = Vec::new();
+
+        while let Some(chunk) = stream.next().await {
+            let data = chunk.map_err(|err| err.to_string())?;
+            buffer.extend_from_slice(&data);
+            process_ollama_buffer(&app_handle, &mut buffer, &mut collected_tool_calls)?;
+        }
+
+        if !buffer.is_empty() {
+            buffer.push(b'\n');
+            process_ollama_buffer(&app_handle, &mut buffer, &mut collected_tool_calls)?;
+        }
+
+        if collected_tool_calls.is_empty() {
+            break;
+        }
+
+        // Tools were invoked by the model! Execute each tool and feed results back to the model:
+        let tool_calls_json: Vec<serde_json::Value> = collected_tool_calls
+            .iter()
+            .map(|tc| {
+                json!({
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    }
+                })
+            })
+            .collect();
+
+        messages.push(json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": tool_calls_json,
+        }));
+
+        for tc in &collected_tool_calls {
+            let raw_name = &tc.function.name;
+            let parts: Vec<&str> = raw_name.split("__").collect();
+            let server_name = parts[0];
+            let tool_name = if parts.len() > 1 { parts[1..].join("__") } else { raw_name.to_string() };
+
+            let res = state.mcp_manager.call_tool(server_name, &tool_name, tc.function.arguments.clone()).await;
+            let (res_str, is_err, dur) = match res {
+                Ok(r) => (serde_json::to_string(&r.content).unwrap_or_default(), r.is_error, r.duration_ms),
+                Err(e) => (format!("Error executing tool: {}", e), true, 0),
+            };
+
+            let _ = app_handle.emit("mcp-tool-result", json!({
+                "raw_name": raw_name,
+                "server_name": server_name,
+                "tool_name": tool_name,
+                "duration_ms": dur,
+                "is_error": is_err,
+                "content": res_str,
+            }));
+
+            messages.push(json!({
+                "role": "tool",
+                "content": res_str,
+            }));
+        }
     }
 
     Ok(())
@@ -438,9 +630,13 @@ async fn get_terminal_context(
 }
 
 #[tauri::command]
-async fn check_ollama() -> Result<bool, String> {
+async fn check_ollama(state: State<'_, AppState>, host: Option<String>) -> Result<bool, String> {
+    let ollama_host = match host.as_deref() {
+        Some(h) if !h.trim().is_empty() => resolve_ollama_url(h),
+        _ => state.get_ollama_host().await,
+    };
     let response = HTTP_CLIENT
-        .get("http://127.0.0.1:11434/api/tags")
+        .get(format!("{}/api/tags", ollama_host))
         .send()
         .await;
 
@@ -583,8 +779,9 @@ async fn get_system_context(
         .map_err(|err| err.to_string())?;
 
     // Check if Ollama is online
+    let ollama_host = state.get_ollama_host().await;
     let ollama_online = HTTP_CLIENT
-        .get("http://127.0.0.1:11434/api/tags")
+        .get(format!("{}/api/tags", ollama_host))
         .send()
         .await
         .map(|res| res.status().is_success())
@@ -615,9 +812,16 @@ fn get_local_ip() -> Option<String> {
 }
 
 #[tauri::command]
-async fn list_ollama_models() -> Result<Vec<String>, String> {
+async fn list_ollama_models(
+    state: State<'_, AppState>,
+    host: Option<String>,
+) -> Result<Vec<String>, String> {
+    let ollama_host = match host.as_deref() {
+        Some(h) if !h.trim().is_empty() => resolve_ollama_url(h),
+        _ => state.get_ollama_host().await,
+    };
     let response = HTTP_CLIENT
-        .get("http://127.0.0.1:11434/api/tags")
+        .get(format!("{}/api/tags", ollama_host))
         .send()
         .await
         .map_err(|err| err.to_string())?;
@@ -626,8 +830,8 @@ async fn list_ollama_models() -> Result<Vec<String>, String> {
         let status = response.status();
         let detail = response.text().await.unwrap_or_default();
         return Err(format!(
-            "Failed to fetch models from Ollama ({}): {}",
-            status, detail
+            "Failed to fetch models from Ollama at {} ({}): {}",
+            ollama_host, status, detail
         ));
     }
 
@@ -638,11 +842,22 @@ async fn list_ollama_models() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+async fn set_ollama_host(state: State<'_, AppState>, host: String) -> Result<String, String> {
+    Ok(state.set_ollama_host(&host).await)
+}
+
+#[tauri::command]
+async fn get_ollama_host(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(state.get_ollama_host().await)
+}
+
+#[tauri::command]
 async fn analyze_command(
     app_handle: AppHandle,
+    state: State<'_, AppState>,
     request: AnalyzeCommandRequest,
 ) -> Result<AnalyzeCommandResponse, String> {
-    let AnalyzeCommandRequest { command, model } = request;
+    let AnalyzeCommandRequest { command, model, host } = request;
     let command = command.trim().to_string();
     if command.is_empty() {
         return Ok(AnalyzeCommandResponse {
@@ -652,6 +867,11 @@ async fn analyze_command(
             score: 0,
         });
     }
+
+    let ollama_host = match host.as_deref() {
+        Some(h) if !h.trim().is_empty() => resolve_ollama_url(h),
+        _ => state.get_ollama_host().await,
+    };
 
     let lower_command = command.to_lowercase();
 
@@ -696,8 +916,9 @@ async fn analyze_command(
         "stream": false
     });
 
+    let chat_endpoint = format!("{}/api/chat", ollama_host);
     let response = HTTP_CLIENT
-        .post("http://127.0.0.1:11434/api/chat")
+        .post(&chat_endpoint)
         .json(&body)
         .send()
         .await
@@ -724,10 +945,10 @@ async fn analyze_command(
 
     let parsed_report: Option<PreflightReport> = match parse_preflight_report(content) {
         Ok(report) => Some(report),
-        Err(parse_error) => match repair_preflight_report(&app_handle, &resolved_model, content).await {
+        Err(parse_error) => match repair_preflight_report(&app_handle, &resolved_model, &ollama_host, content).await {
             Ok(Some(report)) => Some(report),
             Ok(None) => {
-                let assessment = fallback_text_summary(&app_handle, &resolved_model, &command, content, Some(&parse_error))
+                let assessment = fallback_text_summary(&app_handle, &resolved_model, &ollama_host, &command, content, Some(&parse_error))
                     .await
                     .unwrap_or_else(|fallback_error| {
                         format!(
@@ -764,7 +985,7 @@ async fn analyze_command(
                 });
             }
             Err(repair_error) => {
-                let assessment = fallback_text_summary(&app_handle, &resolved_model, &command, content, Some(&parse_error))
+                let assessment = fallback_text_summary(&app_handle, &resolved_model, &ollama_host, &command, content, Some(&parse_error))
                     .await
                     .unwrap_or_else(|fallback_error| {
                         format!(
@@ -1145,6 +1366,7 @@ fn replace_quotes_inside_backticks(input: &str) -> Option<String> {
 async fn repair_preflight_report(
     app_handle: &AppHandle,
     model: &str,
+    host: &str,
     raw_content: &str,
 ) -> Result<Option<PreflightReport>, String> {
     if raw_content.trim().is_empty() {
@@ -1166,8 +1388,9 @@ async fn repair_preflight_report(
         "stream": false
     });
 
+    let chat_endpoint = format!("{}/api/chat", host);
     let response = HTTP_CLIENT
-        .post("http://127.0.0.1:11434/api/chat")
+        .post(&chat_endpoint)
         .json(&body)
         .send()
         .await
@@ -1202,6 +1425,7 @@ async fn repair_preflight_report(
 async fn fallback_text_summary(
     app_handle: &AppHandle,
     model: &str,
+    host: &str,
     command: &str,
     raw_content: &str,
     parse_error: Option<&serde_json::Error>,
@@ -1224,8 +1448,9 @@ async fn fallback_text_summary(
         "stream": false
     });
 
+    let chat_endpoint = format!("{}/api/chat", host);
     let response = HTTP_CLIENT
-        .post("http://127.0.0.1:11434/api/chat")
+        .post(&chat_endpoint)
         .json(&body)
         .send()
         .await
@@ -1257,7 +1482,11 @@ async fn fallback_text_summary(
     Ok(sanitize_plain_text_assessment(&content))
 }
 
-fn process_ollama_buffer(app_handle: &AppHandle, buffer: &mut Vec<u8>) -> Result<(), String> {
+fn process_ollama_buffer(
+    app_handle: &AppHandle,
+    buffer: &mut Vec<u8>,
+    collected_tool_calls: &mut Vec<OllamaToolCall>,
+) -> Result<(), String> {
     loop {
         let Some(position) = buffer.iter().position(|b| *b == b'\n') else {
             break;
@@ -1273,13 +1502,21 @@ fn process_ollama_buffer(app_handle: &AppHandle, buffer: &mut Vec<u8>) -> Result
 
         let chunk: OllamaResponseChunk =
             serde_json::from_str(trimmed).map_err(|err| err.to_string())?;
-        handle_ollama_chunk(app_handle, chunk);
+
+        if let Some(msg) = &chunk.message {
+            if let Some(tcs) = &msg.tool_calls {
+                collected_tool_calls.extend(tcs.clone());
+            }
+        }
+
+        let has_tools = !collected_tool_calls.is_empty();
+        handle_ollama_chunk(app_handle, chunk, has_tools);
     }
 
     Ok(())
 }
 
-fn handle_ollama_chunk(app_handle: &AppHandle, chunk: OllamaResponseChunk) {
+fn handle_ollama_chunk(app_handle: &AppHandle, chunk: OllamaResponseChunk, suppressing_done: bool) {
     if let Some(error) = chunk.error {
         emit_ollama_chunk(
             app_handle,
@@ -1287,36 +1524,60 @@ fn handle_ollama_chunk(app_handle: &AppHandle, chunk: OllamaResponseChunk) {
                 content: None,
                 done: true,
                 error: Some(error),
+                eval_count: None,
+                eval_duration: None,
+                prompt_eval_count: None,
+                prompt_eval_duration: None,
+                total_duration: None,
+                tool_calls: None,
             },
         );
         return;
     }
 
-    if chunk.done.unwrap_or(false) {
+    if chunk.done.unwrap_or(false) && !suppressing_done {
         if let Some(savings) = chunk.eco_savings() {
             emit_eco_savings(app_handle, savings);
         }
     }
+
+    let is_done = if suppressing_done {
+        false
+    } else {
+        chunk.done.unwrap_or(false)
+    };
 
     if let Some(message) = chunk.message {
         emit_ollama_chunk(
             app_handle,
             OllamaChunkPayload {
                 content: Some(message.content),
-                done: chunk.done.unwrap_or(false),
+                done: is_done,
                 error: None,
+                eval_count: chunk.eval_count,
+                eval_duration: chunk.eval_duration,
+                prompt_eval_count: chunk.prompt_eval_count,
+                prompt_eval_duration: chunk.prompt_eval_duration,
+                total_duration: chunk.total_duration,
+                tool_calls: message.tool_calls,
             },
         );
         return;
     }
 
-    if chunk.done.unwrap_or(false) {
+    if is_done {
         emit_ollama_chunk(
             app_handle,
             OllamaChunkPayload {
                 content: None,
                 done: true,
                 error: None,
+                eval_count: chunk.eval_count,
+                eval_duration: chunk.eval_duration,
+                prompt_eval_count: chunk.prompt_eval_count,
+                prompt_eval_duration: chunk.prompt_eval_duration,
+                total_duration: chunk.total_duration,
+                tool_calls: None,
             },
         );
     }
@@ -1557,7 +1818,9 @@ struct OllamaResponseChunk {
     error: Option<String>,
     // Inference stats Ollama attaches to the final chunk of a stream.
     prompt_eval_count: Option<u64>,
+    prompt_eval_duration: Option<u64>,
     eval_count: Option<u64>,
+    eval_duration: Option<u64>,
     total_duration: Option<u64>,
 }
 
@@ -1581,6 +1844,8 @@ struct OllamaMessage {
     #[allow(dead_code)]
     role: String,
     content: String,
+    #[serde(default)]
+    tool_calls: Option<Vec<OllamaToolCall>>,
 }
 
 #[derive(Deserialize)]
@@ -1910,6 +2175,202 @@ mod tests {
     fn normalize_strips_quotes_and_escapes() {
         assert_eq!(normalize_command_heuristics(r#"echo "hi \'there\'""#), "echo hi there");
     }
+
+    #[test]
+    fn resolves_ollama_urls_properly() {
+        assert_eq!(resolve_ollama_url(""), "http://127.0.0.1:11434");
+        assert_eq!(resolve_ollama_url("   "), "http://127.0.0.1:11434");
+        assert_eq!(resolve_ollama_url("192.168.1.100:11434/"), "http://192.168.1.100:11434");
+        assert_eq!(resolve_ollama_url("https://remote.ollama.lan:443/"), "https://remote.ollama.lan:443");
+    }
+
+    #[test]
+    fn strips_ansi_escape_sequences() {
+        let text = "\x1b[32muser@host\x1b[0m:\x1b[34m~/code\x1b[0m$ ls -la\r\n";
+        assert_eq!(strip_ansi_escapes(text), "user@host:~/code$ ls -la\n");
+    }
+
+    #[test]
+    fn extracts_last_command_output_from_snapshot() {
+        let mut snapshot = TerminalSnapshot::default();
+        snapshot.append("user@host:~$ echo hello\nhello\nuser@host:~$ ");
+        let output = snapshot.extract_last_command_output();
+        assert!(output.contains("echo hello"));
+        assert!(output.contains("hello"));
+    }
+}
+
+#[tauri::command]
+async fn get_last_command_output(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<String, String> {
+    let snapshots = state.terminal_snapshots.lock().await;
+    let snapshot = snapshots
+        .get(&session_id)
+        .ok_or_else(|| format!("terminal session {session_id} not found"))?;
+    Ok(snapshot.extract_last_command_output())
+}
+
+#[tauri::command]
+async fn get_workspace_tree(cwd: Option<String>, max_depth: Option<usize>) -> Result<String, String> {
+    let dir = match cwd {
+        Some(c) if !c.trim().is_empty() => std::path::PathBuf::from(c),
+        _ => std::env::current_dir().map_err(|e| e.to_string())?,
+    };
+    let depth = max_depth.unwrap_or(2).min(5);
+    generate_workspace_tree(&dir, depth)
+}
+
+fn generate_workspace_tree(root: &std::path::Path, max_depth: usize) -> Result<String, String> {
+    let mut output = String::new();
+    let root_name = root.file_name().and_then(|n| n.to_str()).unwrap_or(".");
+    output.push_str(&format!("{}/\n", root_name));
+    let _ = build_tree_recursive(root, "", 1, max_depth, &mut output);
+    Ok(output)
+}
+
+fn build_tree_recursive(
+    dir: &std::path::Path,
+    prefix: &str,
+    current_depth: usize,
+    max_depth: usize,
+    output: &mut String,
+) -> Result<(), String> {
+    if current_depth > max_depth {
+        return Ok(());
+    }
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(read_dir) => {
+            let mut list: Vec<_> = read_dir
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    let name = e.file_name();
+                    let s = name.to_string_lossy();
+                    !s.starts_with('.')
+                        && s != "node_modules"
+                        && s != "target"
+                        && s != "dist"
+                        && s != "build"
+                        && s != "venv"
+                        && s != "__pycache__"
+                })
+                .collect();
+            list.sort_by_key(|e| e.file_name());
+            list
+        }
+        Err(_) => return Ok(()),
+    };
+
+    let total = entries.len();
+    for (i, entry) in entries.iter().enumerate() {
+        let is_last = i == total - 1;
+        let connector = if is_last { "└── " } else { "├── " };
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let path = entry.path();
+        let is_dir = path.is_dir();
+
+        output.push_str(&format!("{}{}{}{}\n", prefix, connector, name_str, if is_dir { "/" } else { "" }));
+
+        if is_dir && current_depth < max_depth {
+            let next_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+            let _ = build_tree_recursive(&path, &next_prefix, current_depth + 1, max_depth, output);
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_git_status(cwd: Option<String>) -> Result<String, String> {
+    let dir = match cwd {
+        Some(c) if !c.trim().is_empty() => std::path::PathBuf::from(c),
+        _ => std::env::current_dir().map_err(|e| e.to_string())?,
+    };
+
+    let status_output = std::process::Command::new("git")
+        .arg("status")
+        .arg("--short")
+        .current_dir(&dir)
+        .output();
+
+    let diff_output = std::process::Command::new("git")
+        .arg("diff")
+        .arg("--stat")
+        .current_dir(&dir)
+        .output();
+
+    match (status_output, diff_output) {
+        (Ok(s), Ok(d)) => {
+            let status_str = String::from_utf8_lossy(&s.stdout);
+            let diff_str = String::from_utf8_lossy(&d.stdout);
+            let branch = std::process::Command::new("git")
+                .arg("branch")
+                .arg("--show-current")
+                .current_dir(&dir)
+                .output()
+                .ok()
+                .map(|b| String::from_utf8_lossy(&b.stdout).trim().to_string())
+                .unwrap_or_default();
+
+            let mut res = String::new();
+            if !branch.is_empty() {
+                res.push_str(&format!("On branch: {}\n\n", branch));
+            }
+            if !status_str.trim().is_empty() {
+                res.push_str("Changes:\n");
+                res.push_str(&status_str);
+            } else {
+                res.push_str("Working tree clean\n");
+            }
+            if !diff_str.trim().is_empty() {
+                res.push_str("\nDiff summary:\n");
+                res.push_str(&diff_str);
+            }
+            Ok(res)
+        }
+        _ => Err("Git is not available or directory is not a git repository".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn mcp_load_config() -> Result<mcp::McpConfigFile, String> {
+    mcp::load_mcp_config()
+}
+
+#[tauri::command]
+async fn mcp_save_config(config: mcp::McpConfigFile) -> Result<(), String> {
+    mcp::save_mcp_config(&config)
+}
+
+#[tauri::command]
+async fn mcp_get_servers_status(state: State<'_, AppState>) -> Result<Vec<mcp::McpServerInfo>, String> {
+    Ok(state.mcp_manager.get_servers_status().await)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn mcp_restart_server(
+    state: State<'_, AppState>,
+    server_id: String,
+) -> Result<mcp::McpServerInfo, String> {
+    state.mcp_manager.restart_server(&server_id).await
+}
+
+#[tauri::command]
+async fn mcp_list_tools(state: State<'_, AppState>) -> Result<Vec<mcp::McpToolInfo>, String> {
+    Ok(state.mcp_manager.list_tools().await)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn mcp_call_tool(
+    state: State<'_, AppState>,
+    server_id: String,
+    tool_name: String,
+    arguments: serde_json::Value,
+) -> Result<mcp::McpCallResult, String> {
+    state.mcp_manager.call_tool(&server_id, &tool_name, arguments).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1925,6 +2386,11 @@ pub fn run() {
                     }
                 }
             }
+            let state = app.state::<AppState>();
+            let mcp = state.mcp_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                mcp.init_from_disk().await;
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1937,7 +2403,18 @@ pub fn run() {
             get_terminal_context,
             get_system_context,
             analyze_command,
-            close_pty
+            close_pty,
+            set_ollama_host,
+            get_ollama_host,
+            get_last_command_output,
+            get_workspace_tree,
+            get_git_status,
+            mcp_load_config,
+            mcp_save_config,
+            mcp_get_servers_status,
+            mcp_restart_server,
+            mcp_list_tools,
+            mcp_call_tool
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
