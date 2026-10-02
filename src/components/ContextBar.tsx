@@ -61,8 +61,16 @@ const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
       if (!document.hidden) {
         fetchContext();
       }
-    }, 5000); // Update every 5 seconds
-    return () => clearInterval(interval);
+    }, 1500); // Update every 1.5 seconds
+    const onFocus = () => fetchContext();
+    const onRefresh = () => fetchContext();
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("termalime:refresh-context", onRefresh);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("termalime:refresh-context", onRefresh);
+    };
   }, [fetchContext]);
 
   const { session, lifetime } = useEco();
@@ -70,18 +78,17 @@ const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
   return (
     <footer className="context-bar">
       <div className="context-bar__section context-bar__section--buttons">
-        <button className="context-btn" onClick={onSettingsClick}>
+        <button className="context-btn" onClick={onSettingsClick} title="Settings" aria-label="Settings">
           <Settings2 size={14} />
-          <span>Settings</span>
         </button>
         <CommandsButton onRunCommand={(cmd) => window.dispatchEvent(new CustomEvent("termalime:run-command", { detail: cmd }))} />
         <button
-          className="context-btn context-btn--highlight"
+          className="context-btn"
           onClick={() => window.dispatchEvent(new CustomEvent("termalime:explain-terminal", { detail: { sessionId } }))}
-          title="Analyze terminal output & diagnose errors with Lime (Ctrl+Shift+E)"
+          title="Explain: Analyze terminal output & diagnose errors with Copilot (Ctrl+Shift+E)"
+          aria-label="Explain terminal"
         >
           <Sparkles size={14} />
-          <span>Explain</span>
         </button>
       </div>
 
@@ -89,7 +96,7 @@ const ContextBar = ({ onSettingsClick, sessionId }: ContextBarProps) => {
 
       <div className="context-bar__section context-bar__section--meta">
         {context.gitBranch && (
-          <div className="context-item" title="Git branch">
+          <div className="context-item context-item--git" title={`Git branch: ${context.gitBranch}`}>
             <GitBranch size={13} />
             <span>{context.gitBranch}</span>
           </div>

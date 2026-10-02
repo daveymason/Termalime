@@ -1,9 +1,16 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 export type Persona = "helpful" | "concise" | "neutral" | "playful";
+export type CursorStyle = "block" | "bar" | "underline";
 
 export interface Settings {
   terminalFontSize: number;
+  terminalFontFamily: string;
+  terminalLineHeight: number;
+  cursorStyle: CursorStyle;
+  cursorBlink: boolean;
+  copyOnSelect: boolean;
+  scrollback: number;
   showChat: boolean;
   includeTerminalContext: boolean;
   systemPrompt: string;
@@ -22,6 +29,12 @@ export const PERSONA_DESCRIPTIONS: Record<Persona, string> = {
 
 export const DEFAULT_SETTINGS: Settings = {
   terminalFontSize: 14,
+  terminalFontFamily: '"JetBrains Mono", "Fira Code", monospace',
+  terminalLineHeight: 1.2,
+  cursorStyle: "block",
+  cursorBlink: true,
+  copyOnSelect: false,
+  scrollback: 5000,
   showChat: true,
   includeTerminalContext: true,
   systemPrompt:

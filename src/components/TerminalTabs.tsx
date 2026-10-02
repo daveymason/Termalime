@@ -30,6 +30,7 @@ const TerminalTabs = ({ onActiveSessionChange }: TerminalTabsProps) => {
     activeIdRef.current = tabId;
     setActiveId(tabId);
     onActiveSessionChange?.(sessionsRef.current.get(tabId) ?? null);
+    window.dispatchEvent(new CustomEvent("termalime:refresh-context"));
   };
 
   const handleSessionChange = (tabId: number, sessionId: string | null) => {
@@ -89,7 +90,7 @@ const TerminalTabs = ({ onActiveSessionChange }: TerminalTabsProps) => {
   };
 
   return (
-    <div className="terminal-tabs">
+    <div className="panel panel--terminal-workspace terminal-tabs">
       <div className="terminal-tabs__bar" role="tablist" aria-label="Terminal tabs">
         {tabs.map((tab) => (
           <div

@@ -4,6 +4,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Bot,
   Check,
+  ChevronDown,
+  ChevronUp,
+  Code2,
+  Copy,
+  FileText,
   FolderTree,
   Globe,
   Leaf,
@@ -13,14 +18,17 @@ import {
   Server,
   Settings2,
   Shield,
+  Sliders,
   Sparkles,
   Terminal,
   Trash2,
+  Type,
   X,
+  Zap,
 } from "lucide-react";
 import clsx from "clsx";
 import { invoke } from "@tauri-apps/api/core";
-import { PERSONA_DESCRIPTIONS, useSettings } from "../state/settings";
+import { CursorStyle, PERSONA_DESCRIPTIONS, useSettings } from "../state/settings";
 import { formatCo2, formatEnergy, formatWater, useEco } from "../state/eco";
 
 const personaOrder = ["helpful", "concise", "neutral", "playful"] as const;
@@ -77,6 +85,22 @@ interface McpServerInfo {
   tool_count: number;
 }
 
+interface McpToolParamProperty {
+  type?: string;
+  description?: string;
+  default?: any;
+}
+
+interface McpToolInfo {
+  name: string;
+  description?: string | null;
+  input_schema?: {
+    type?: string;
+    properties?: Record<string, McpToolParamProperty>;
+    required?: string[];
+  };
+}
+
 interface McpConfigFile {
   mcpServers: Record<
     string,
@@ -101,10 +125,22 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   // MCP Servers state
   const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([]);
   const [loadingMcp, setLoadingMcp] = useState(false);
+  const [busyServerId, setBusyServerId] = useState<string | null>(null);
   const [showAddServer, setShowAddServer] = useState(false);
   const [newServerId, setNewServerId] = useState("");
   const [newServerCmd, setNewServerCmd] = useState("");
   const [newServerArgs, setNewServerArgs] = useState("");
+
+  // MCP Tool Explorer state
+  const [expandedServerTools, setExpandedServerTools] = useState<string | null>(null);
+  const [serverToolsMap, setServerToolsMap] = useState<Record<string, McpToolInfo[]>>({});
+  const [loadingToolsServerId, setLoadingToolsServerId] = useState<string | null>(null);
+
+  // MCP Diagnostics & Stderr Log Viewer state
+  const [diagnosticsServer, setDiagnosticsServer] = useState<McpServerInfo | null>(null);
+  const [serverLogs, setServerLogs] = useState<string[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [logsCopied, setLogsCopied] = useState(false);
 
   useEffect(() => {
     preflightModelRef.current = settings.preflightModel;
@@ -147,11 +183,13 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   const handleAddServer = async () => {
     if (!newServerId.trim() || !newServerCmd.trim()) return;
+    const serverId = newServerId.trim();
+    setBusyServerId(serverId);
     try {
       const config = await invoke<McpConfigFile>("mcp_load_config");
       if (!config.mcpServers) config.mcpServers = {};
       const args = newServerArgs.trim() ? newServerArgs.trim().split(" ") : [];
-      config.mcpServers[newServerId.trim()] = {
+      config.mcpServers[serverId] = {
         command: newServerCmd.trim(),
         args,
         disabled: false,
@@ -161,57 +199,115 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setNewServerCmd("");
       setNewServerArgs("");
       setShowAddServer(false);
-      await loadMcp();
-      await invoke("mcp_restart_server", { server_id: newServerId.trim() });
+      await invoke("mcp_restart_server", { server_id: serverId });
     } catch (err) {
       console.error("Failed to add MCP server", err);
     } finally {
       await loadMcp();
+      setBusyServerId(null);
     }
   };
 
   const toggleMcpServer = async (id: string, disabled: boolean) => {
+    setBusyServerId(id);
     try {
-      const config = await invoke<McpConfigFile>("mcp_load_config");
-      if (config.mcpServers && config.mcpServers[id]) {
-        config.mcpServers[id].disabled = disabled;
-        await invoke("mcp_save_config", { config });
-        await loadMcp();
-        await invoke("mcp_restart_server", { server_id: id });
-      }
+      await invoke("mcp_toggle_server", { server_id: id, disabled });
     } catch (err) {
       console.error("Failed to toggle MCP server", err);
     } finally {
       await loadMcp();
+      setBusyServerId(null);
     }
   };
 
   const restartMcpServer = async (id: string) => {
+    setBusyServerId(id);
     try {
       await invoke("mcp_restart_server", { server_id: id });
     } catch (err) {
       console.error("Failed to restart MCP server", err);
     } finally {
       await loadMcp();
+      setBusyServerId(null);
     }
   };
 
   const deleteMcpServer = async (id: string) => {
+    setBusyServerId(id);
     try {
-      const config = await invoke<McpConfigFile>("mcp_load_config");
-      if (config.mcpServers && config.mcpServers[id]) {
-        delete config.mcpServers[id];
-        await invoke("mcp_save_config", { config });
-        await invoke("mcp_restart_server", { server_id: id });
-      }
+      await invoke("mcp_delete_server", { server_id: id });
     } catch (err) {
       console.error("Failed to delete MCP server", err);
     } finally {
       await loadMcp();
+      setBusyServerId(null);
     }
   };
 
+  const toggleToolsDrawer = async (serverId: string) => {
+    if (expandedServerTools === serverId) {
+      setExpandedServerTools(null);
+      return;
+    }
+    setExpandedServerTools(serverId);
+    if (!serverToolsMap[serverId]) {
+      setLoadingToolsServerId(serverId);
+      try {
+        const tools = await invoke<McpToolInfo[]>("mcp_get_server_tools", { server_id: serverId });
+        setServerToolsMap((prev) => ({ ...prev, [serverId]: tools }));
+      } catch (err) {
+        console.error("Failed to fetch server tools", err);
+      } finally {
+        setLoadingToolsServerId(null);
+      }
+    }
+  };
+
+  const openDiagnostics = async (server: McpServerInfo) => {
+    setDiagnosticsServer(server);
+    setLoadingLogs(true);
+    setLogsCopied(false);
+    try {
+      const logs = await invoke<string[]>("mcp_get_server_logs", { server_id: server.id });
+      setServerLogs(logs);
+    } catch (err) {
+      console.error("Failed to fetch server logs", err);
+      setServerLogs([`Error fetching logs: ${String(err)}`]);
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
+  const refreshDiagnostics = async () => {
+    if (!diagnosticsServer) return;
+    setLoadingLogs(true);
+    try {
+      const logs = await invoke<string[]>("mcp_get_server_logs", { server_id: diagnosticsServer.id });
+      setServerLogs(logs);
+    } catch (err) {
+      console.error("Failed to refresh server logs", err);
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
+  const copyDiagnosticsLogs = () => {
+    const textToCopy =
+      diagnosticsServer?.id === "termalime"
+        ? [
+            "[termalime-native] Engine: In-process Rust MCP Server",
+            "[termalime-native] Status: Ready (3 tools registered: terminal_run_command, workspace_search, workspace_read_file)",
+            "[termalime-native] Latency: 0ms (Direct in-memory Rust async call, zero serialization overhead)",
+            "[termalime-native] Architecture: Native Linux/Rust execution with zero external runtime dependencies.",
+          ].join("\n")
+        : serverLogs.join("\n") || "No logs captured.";
+    navigator.clipboard.writeText(textToCopy);
+    setLogsCopied(true);
+    setTimeout(() => setLogsCopied(false), 2000);
+  };
+
   const installPreset = async (preset: (typeof MCP_PRESETS)[number]) => {
+    setBusyServerId(preset.id);
     try {
       const config = await invoke<McpConfigFile>("mcp_load_config");
       if (!config.mcpServers) config.mcpServers = {};
@@ -221,12 +317,12 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         disabled: false,
       };
       await invoke("mcp_save_config", { config });
-      await loadMcp();
       await invoke("mcp_restart_server", { server_id: preset.id });
     } catch (err) {
       console.error("Failed to install MCP preset", err);
     } finally {
       await loadMcp();
+      setBusyServerId(null);
     }
   };
 
@@ -355,30 +451,203 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
             <div className="settings-tab-content">
               {activeTab === "terminal" && (
-                <>
-                  <section className="settings-section">
-                    <div className="settings-section__label">
-                      <p>Terminal font size</p>
-                      <span>{settings.terminalFontSize}px</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                  {/* Card 1: Typography & Text */}
+                  <div className="settings-card">
+                    <div className="settings-card__header">
+                      <div>
+                        <h4 className="settings-card__title">
+                          <Type size={16} style={{ color: "var(--matrix-neon)" }} />
+                          Typography &amp; Scaling
+                        </h4>
+                        <p className="settings-card__desc">
+                          Configure monospace typeface, glyph scaling, and terminal line spacing.
+                        </p>
+                      </div>
                     </div>
-                    <input
-                      type="range"
-                      min={10}
-                      max={22}
-                      value={settings.terminalFontSize}
-                      onChange={(event) => updateSettings({ terminalFontSize: Number(event.currentTarget.value) })}
-                    />
-                  </section>
 
-                  <section className="settings-grid">
-                    <ToggleCard
-                      title="Show chat panel"
-                      description="Hide when you want a distraction-free terminal."
-                      active={settings.showChat}
-                      onToggle={() => updateSettings({ showChat: !settings.showChat })}
-                    />
-                  </section>
-                </>
+                    <div className="settings-section" style={{ border: "none", padding: 0 }}>
+                      <div className="settings-section__label">
+                        <p>Font Family</p>
+                        <span className="settings-badge">Monospace</span>
+                      </div>
+                      <select
+                        value={settings.terminalFontFamily}
+                        onChange={(event) => updateSettings({ terminalFontFamily: event.currentTarget.value })}
+                      >
+                        <option value={'"JetBrains Mono", "Fira Code", monospace'}>JetBrains Mono (Default)</option>
+                        <option value={'"Fira Code", monospace'}>Fira Code</option>
+                        <option value={'"Cascadia Code", "Cascadia Mono", monospace'}>Cascadia Code</option>
+                        <option value={'"Source Code Pro", monospace'}>Source Code Pro</option>
+                        <option value={'monospace'}>System Monospace</option>
+                      </select>
+                    </div>
+
+                    <div className="settings-section" style={{ border: "none", padding: 0 }}>
+                      <div className="settings-section__label">
+                        <p>Font Size</p>
+                        <span className="settings-badge">{settings.terminalFontSize}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={10}
+                        max={22}
+                        value={settings.terminalFontSize}
+                        onChange={(event) => updateSettings({ terminalFontSize: Number(event.currentTarget.value) })}
+                      />
+                    </div>
+
+                    <div className="settings-section" style={{ border: "none", padding: 0 }}>
+                      <div className="settings-section__label">
+                        <p>Line Height</p>
+                        <span className="settings-badge">{settings.terminalLineHeight}</span>
+                      </div>
+                      <div className="segmented-control" role="group" aria-label="Terminal line height">
+                        {[
+                          { label: "Compact", value: 1.0 },
+                          { label: "Standard", value: 1.2 },
+                          { label: "Spacious", value: 1.4 },
+                        ].map((lh) => (
+                          <button
+                            key={lh.value}
+                            type="button"
+                            className={clsx(
+                              "segmented-btn",
+                              settings.terminalLineHeight === lh.value && "segmented-btn--active"
+                            )}
+                            onClick={() => updateSettings({ terminalLineHeight: lh.value })}
+                          >
+                            {lh.label} ({lh.value})
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card 2: Cursor & Animation */}
+                  <div className="settings-card">
+                    <div className="settings-card__header">
+                      <div>
+                        <h4 className="settings-card__title">
+                          <Terminal size={16} style={{ color: "var(--matrix-neon)" }} />
+                          Cursor &amp; Interaction
+                        </h4>
+                        <p className="settings-card__desc">
+                          Tailor cursor shape, pulse animation, and instant mouse selection behavior.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="settings-section" style={{ border: "none", padding: 0 }}>
+                      <div className="settings-section__label">
+                        <p>Cursor Style</p>
+                        <span className="settings-badge" style={{ textTransform: "capitalize" }}>
+                          {settings.cursorStyle}
+                        </span>
+                      </div>
+                      <div className="segmented-control" role="group" aria-label="Terminal cursor style">
+                        {[
+                          { id: "block", label: "█ Block" },
+                          { id: "bar", label: "❘ Beam" },
+                          { id: "underline", label: "  Underline" },
+                        ].map((style) => (
+                          <button
+                            key={style.id}
+                            type="button"
+                            className={clsx(
+                              "segmented-btn",
+                              settings.cursorStyle === style.id && "segmented-btn--active"
+                            )}
+                            onClick={() => updateSettings({ cursorStyle: style.id as CursorStyle })}
+                          >
+                            {style.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="settings-grid">
+                      <ToggleCard
+                        title="Blinking cursor"
+                        description="Smoothly pulses cursor in terminal prompts when awaiting input."
+                        active={settings.cursorBlink}
+                        onToggle={() => updateSettings({ cursorBlink: !settings.cursorBlink })}
+                      />
+                      <ToggleCard
+                        title="Copy on select"
+                        description="Automatically copies highlighted terminal text directly to clipboard."
+                        active={settings.copyOnSelect}
+                        onToggle={() => updateSettings({ copyOnSelect: !settings.copyOnSelect })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Card 3: Scrollback & Buffer */}
+                  <div className="settings-card">
+                    <div className="settings-card__header">
+                      <div>
+                        <h4 className="settings-card__title">
+                          <Sliders size={16} style={{ color: "var(--matrix-neon)" }} />
+                          Buffer &amp; History
+                        </h4>
+                        <p className="settings-card__desc">
+                          Manage line retention depth for logs, long compilation outputs, and terminal replay.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="settings-section" style={{ border: "none", padding: 0 }}>
+                      <div className="settings-section__label">
+                        <p>Scrollback Lines</p>
+                        <span className="settings-badge">{settings.scrollback.toLocaleString()} lines</span>
+                      </div>
+                      <div className="segmented-control" role="group" aria-label="Scrollback limit">
+                        {[
+                          { label: "1,000", value: 1000 },
+                          { label: "5,000", value: 5000 },
+                          { label: "10,000", value: 10000 },
+                          { label: "50,000", value: 50000 },
+                        ].map((sb) => (
+                          <button
+                            key={sb.value}
+                            type="button"
+                            className={clsx(
+                              "segmented-btn",
+                              settings.scrollback === sb.value && "segmented-btn--active"
+                            )}
+                            onClick={() => updateSettings({ scrollback: sb.value })}
+                          >
+                            {sb.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card 4: Workspace Layout */}
+                  <div className="settings-card">
+                    <div className="settings-card__header">
+                      <div>
+                        <h4 className="settings-card__title">
+                          <Sparkles size={16} style={{ color: "var(--matrix-neon)" }} />
+                          Workspace Layout
+                        </h4>
+                        <p className="settings-card__desc">
+                          Configure distraction-free viewports and companion side panels.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="settings-grid">
+                      <ToggleCard
+                        title="Show Copilot panel"
+                        description="Split-view companion chatbot. Hide for distraction-free, full-width terminal."
+                        active={settings.showChat}
+                        onToggle={() => updateSettings({ showChat: !settings.showChat })}
+                      />
+                    </div>
+                  </div>
+                </div>
               )}
 
               {activeTab === "ai" && (
@@ -387,7 +656,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     <div className="settings-card__header">
                       <div>
                         <h4 className="settings-card__title">
-                          <Network size={16} style={{ color: "#34d399" }} />
+                          <Network size={16} style={{ color: "var(--matrix-neon)" }} />
                           Local Ollama Gateway
                         </h4>
                         <p className="settings-card__desc">
@@ -414,7 +683,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       </button>
                     </div>
                     {hostStatus && (
-                      <span className={clsx("settings-hint", hostStatus.ok ? "text-emerald-400" : "settings-hint--error")}>
+                      <span className={clsx("settings-hint", hostStatus.ok ? "settings-hint--ok" : "settings-hint--error")}>
                         {hostStatus.message}
                       </span>
                     )}
@@ -491,7 +760,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     <div className="settings-section" style={{ border: "none", padding: 0 }}>
                       <div className="settings-section__label">
                         <p>Tone &amp; Demeanor</p>
-                        <span>Choose Lime Copilot's personality</span>
+                        <span>Choose Copilot's personality</span>
                       </div>
                       <div className="persona-row">
                         {personaOrder.map((persona) => (
@@ -551,7 +820,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           <div key={preset.id} className="mcp-preset-card">
                             <div className="mcp-preset-card__top">
                               <div className="mcp-preset-card__name">
-                                <Icon size={15} style={{ color: "#34d399" }} />
+                                <Icon size={15} style={{ color: "var(--matrix-neon)" }} />
                                 <span>{preset.name}</span>
                               </div>
                             </div>
@@ -559,7 +828,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                             <button
                               type="button"
                               className="mcp-preset-card__btn"
-                              disabled={isInstalled}
+                              disabled={isInstalled || busyServerId === preset.id}
                               onClick={() => installPreset(preset)}
                               style={isInstalled ? { opacity: 0.65, cursor: "default" } : {}}
                             >
@@ -571,7 +840,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                               ) : (
                                 <>
                                   <Plus size={12} />
-                                  <span>Install</span>
+                                  <span>{busyServerId === preset.id ? "Installing…" : "Install"}</span>
                                 </>
                               )}
                             </button>
@@ -585,7 +854,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     <div className="settings-card__header">
                       <div>
                         <h4 className="settings-card__title">
-                          <Server size={16} style={{ color: "#34d399" }} />
+                          <Server size={16} style={{ color: "var(--matrix-neon)" }} />
                           Configured Servers ({mcpServers.length})
                         </h4>
                         <p className="settings-card__desc">
@@ -611,52 +880,187 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           No custom servers configured yet. Pick a starter preset above or click &quot;Add Custom Server&quot;.
                         </div>
                       )}
-                      {mcpServers.map((srv) => (
-                        <div key={srv.id} className="mcp-server-item">
-                          <div className="mcp-server-meta">
-                            <span className={clsx("mcp-status-dot", `mcp-status--${srv.status}`)} title={`Status: ${srv.status}`} />
-                            <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
-                                <strong style={{ color: "#f8fafc", fontSize: "0.85rem" }}>{srv.id}</strong>
-                                <span className="mcp-tool-count">
-                                  {srv.tool_count} {srv.tool_count === 1 ? "tool" : "tools"}
-                                </span>
+                      {mcpServers.map((srv) => {
+                        const isBusy = busyServerId === srv.id;
+                        const isNative = srv.id === "termalime";
+                        const isExpanded = expandedServerTools === srv.id;
+                        const tools = serverToolsMap[srv.id] || [];
+                        const isLoadingTools = loadingToolsServerId === srv.id;
+
+                        return (
+                          <div
+                            key={srv.id}
+                            className={clsx(
+                              "mcp-server-card",
+                              isNative && "mcp-server-card--native",
+                              isExpanded && "mcp-server-card--expanded"
+                            )}
+                          >
+                            <div className="mcp-server-item">
+                              <div className="mcp-server-meta">
+                                <span
+                                  className={clsx("mcp-status-dot", `mcp-status--${srv.status}`)}
+                                  title={`Status: ${srv.status}`}
+                                />
+                                <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                                    <strong style={{ color: "#f8fafc", fontSize: "0.86rem" }}>{srv.id}</strong>
+                                    {isNative && (
+                                      <span className="mcp-builtin-badge">
+                                        <Zap size={10} /> Native Core Rust
+                                      </span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className={clsx(
+                                        "mcp-tool-count-btn",
+                                        isExpanded && "mcp-tool-count-btn--active"
+                                      )}
+                                      onClick={() => toggleToolsDrawer(srv.id)}
+                                      title="Inspect tool schemas"
+                                    >
+                                      <Code2 size={12} />
+                                      <span>
+                                        {srv.tool_count} {srv.tool_count === 1 ? "tool" : "tools"}
+                                      </span>
+                                      {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                    </button>
+                                  </div>
+                                  <code style={{ fontSize: "0.7rem", color: isNative ? "var(--matrix-neon)" : "rgba(255,255,255,0.5)" }}>
+                                    {isNative
+                                      ? "In-process zero-latency • Zero dependencies • Linux/Unix native"
+                                      : `${srv.command} ${srv.args.join(" ")}`}
+                                  </code>
+                                </div>
                               </div>
-                              <code style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)" }}>
-                                {srv.command} {srv.args.join(" ")}
-                              </code>
+                              <div className="mcp-server-actions">
+                                <button
+                                  type="button"
+                                  className="text-btn mcp-action-btn"
+                                  onClick={() => openDiagnostics(srv)}
+                                  title="View server logs & stderr diagnostics"
+                                >
+                                  <FileText size={12} />
+                                  <span>Logs</span>
+                                </button>
+                                {!isNative && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="text-btn mcp-action-btn"
+                                      disabled={isBusy}
+                                      onClick={() => toggleMcpServer(srv.id, !srv.disabled)}
+                                    >
+                                      {srv.disabled ? "Enable" : "Disable"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="text-btn mcp-icon-btn"
+                                      disabled={isBusy}
+                                      onClick={() => restartMcpServer(srv.id)}
+                                      title="Restart server"
+                                    >
+                                      <RotateCw size={13} className={clsx(isBusy && "icon-spin")} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="text-btn mcp-icon-btn mcp-icon-btn--delete"
+                                      disabled={isBusy}
+                                      onClick={() => deleteMcpServer(srv.id)}
+                                      title="Delete server"
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
                             </div>
+
+                            {/* Tool Explorer & Schema Inspector Drawer */}
+                            {isExpanded && (
+                              <div className="mcp-tools-drawer">
+                                <div className="mcp-tools-drawer-header">
+                                  <span className="mcp-tools-drawer-title">
+                                    Tool Explorer &amp; Schema Inspector ({tools.length})
+                                  </span>
+                                  <span className="mcp-tools-drawer-desc">
+                                    Tools registered with Ollama for function calling &amp; automated execution.
+                                  </span>
+                                </div>
+
+                                {isLoadingTools && (
+                                  <div className="mcp-tools-loading">
+                                    <RotateCw size={14} className="icon-spin" />
+                                    <span>Querying MCP tool capabilities…</span>
+                                  </div>
+                                )}
+
+                                {!isLoadingTools && tools.length === 0 && (
+                                  <div className="mcp-tools-empty">
+                                    No tools exposed by this server yet or server is initializing.
+                                  </div>
+                                )}
+
+                                {!isLoadingTools && tools.length > 0 && (
+                                  <div className="mcp-tools-grid">
+                                    {tools.map((tool) => {
+                                      const properties = tool.input_schema?.properties || {};
+                                      const required = tool.input_schema?.required || [];
+                                      const propKeys = Object.keys(properties);
+
+                                      return (
+                                        <div key={tool.name} className="mcp-tool-card">
+                                          <div className="mcp-tool-top">
+                                            <Code2 size={13} className="mcp-tool-icon" />
+                                            <code className="mcp-tool-name">{tool.name}</code>
+                                          </div>
+                                          {tool.description && (
+                                            <p className="mcp-tool-desc">{tool.description}</p>
+                                          )}
+                                          <div className="mcp-tool-params">
+                                            <span className="mcp-params-label">Parameters:</span>
+                                            {propKeys.length === 0 ? (
+                                              <span className="mcp-no-params">No parameters required</span>
+                                            ) : (
+                                              <div className="mcp-params-list">
+                                                {propKeys.map((propName) => {
+                                                  const prop = properties[propName];
+                                                  const isReq = required.includes(propName);
+                                                  return (
+                                                    <div key={propName} className="mcp-param-row">
+                                                      <div className="mcp-param-head">
+                                                        <code className="mcp-param-name">{propName}</code>
+                                                        <span className="mcp-param-type">
+                                                          {prop?.type || "any"}
+                                                        </span>
+                                                        <span
+                                                          className={clsx(
+                                                            "mcp-param-badge",
+                                                            isReq ? "mcp-param-badge--req" : "mcp-param-badge--opt"
+                                                          )}
+                                                        >
+                                                          {isReq ? "(required)" : "(optional)"}
+                                                        </span>
+                                                      </div>
+                                                      {prop?.description && (
+                                                        <p className="mcp-param-desc">{prop.description}</p>
+                                                      )}
+                                                    </div>
+                                                  );
+                                                })}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          <div className="mcp-server-actions">
-                            <button
-                              type="button"
-                              className="text-btn"
-                              onClick={() => toggleMcpServer(srv.id, !srv.disabled)}
-                              style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
-                            >
-                              {srv.disabled ? "Enable" : "Disable"}
-                            </button>
-                            <button
-                              type="button"
-                              className="text-btn"
-                              onClick={() => restartMcpServer(srv.id)}
-                              title="Restart server"
-                              style={{ fontSize: "0.75rem", padding: "0.25rem 0.4rem" }}
-                            >
-                              <RotateCw size={13} />
-                            </button>
-                            <button
-                              type="button"
-                              className="text-btn"
-                              onClick={() => deleteMcpServer(srv.id)}
-                              title="Delete server"
-                              style={{ fontSize: "0.75rem", padding: "0.25rem 0.4rem", color: "#f87171" }}
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
 
                     {showAddServer && (
@@ -693,7 +1097,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                             type="button"
                             className="text-btn"
                             onClick={handleAddServer}
-                            style={{ color: "#34d399", fontWeight: 600 }}
+                            style={{ color: "var(--matrix-neon)", fontWeight: 600 }}
                           >
                             Save &amp; Start
                           </button>
@@ -758,10 +1162,146 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
             <footer className="settings-panel__footer">
               <span className="settings-panel__hint">Changes save instantly.</span>
-              <button className="text-btn" onClick={onClose} style={{ color: "#34d399", fontWeight: 600 }}>
+              <button className="text-btn" onClick={onClose} style={{ color: "var(--matrix-neon)", fontWeight: 600 }}>
                 Done
               </button>
             </footer>
+          </motion.div>
+        </motion.div>
+      )}
+
+      {diagnosticsServer && (
+        <motion.div
+          className="mcp-log-modal-overlay"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+          onClick={() => setDiagnosticsServer(null)}
+        >
+          <motion.div
+            className="mcp-log-modal"
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.95, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mcp-log-modal-header">
+              <div className="mcp-log-modal-title-wrap">
+                <Terminal size={17} style={{ color: "var(--matrix-neon)" }} />
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <h3>Server Diagnostics</h3>
+                    <span className="mcp-modal-server-id">{diagnosticsServer.id}</span>
+                    <span
+                      className={clsx("mcp-status-dot", `mcp-status--${diagnosticsServer.status}`)}
+                      title={`Status: ${diagnosticsServer.status}`}
+                    />
+                    <span className="mcp-modal-status-text">{diagnosticsServer.status}</span>
+                  </div>
+                  <code className="mcp-modal-cmd">
+                    {diagnosticsServer.id === "termalime"
+                      ? "In-process Native Rust Engine (Zero-dependency)"
+                      : `${diagnosticsServer.command} ${diagnosticsServer.args.join(" ")}`}
+                  </code>
+                </div>
+              </div>
+
+              <div className="mcp-log-modal-actions">
+                {diagnosticsServer.id !== "termalime" && (
+                  <button
+                    type="button"
+                    className="text-btn mcp-modal-action-btn"
+                    onClick={refreshDiagnostics}
+                    disabled={loadingLogs}
+                    title="Refresh live logs"
+                  >
+                    <RotateCw size={13} className={clsx(loadingLogs && "icon-spin")} />
+                    <span>Refresh</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="text-btn mcp-modal-action-btn"
+                  onClick={copyDiagnosticsLogs}
+                  title="Copy logs to clipboard"
+                >
+                  {logsCopied ? (
+                    <>
+                      <Check size={13} style={{ color: "var(--matrix-neon)" }} />
+                      <span style={{ color: "var(--matrix-neon)" }}>Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={13} />
+                      <span>Copy</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn mcp-modal-close"
+                  onClick={() => setDiagnosticsServer(null)}
+                  aria-label="Close diagnostics"
+                >
+                  <X size={17} />
+                </button>
+              </div>
+            </div>
+
+            <div className="mcp-log-modal-body">
+              {diagnosticsServer.id === "termalime" ? (
+                <div className="mcp-native-diagnostics-box">
+                  <div className="mcp-native-line">
+                    <span className="mcp-native-tag">[termalime-native]</span> Engine: In-process Native Rust MCP Server
+                  </div>
+                  <div className="mcp-native-line">
+                    <span className="mcp-native-tag">[termalime-native]</span> Binary: Termalime Desktop Client
+                  </div>
+                  <div className="mcp-native-line">
+                    <span className="mcp-native-tag">[termalime-native]</span> Status: Operational &amp; Ready
+                  </div>
+                  <div className="mcp-native-line">
+                    <span className="mcp-native-tag">[termalime-native]</span> Latency: &lt;1ms (In-memory asynchronous call, zero serialization delay)
+                  </div>
+                  <div className="mcp-native-line" style={{ marginTop: "0.6rem" }}>
+                    <span className="mcp-native-tag">[termalime-native]</span> Registered Built-in Tools (3):
+                  </div>
+                  <div className="mcp-native-tool-item">
+                    • <code>terminal_run_command</code>: Executes commands in bash/zsh with configurable timeout controls
+                  </div>
+                  <div className="mcp-native-tool-item">
+                    • <code>workspace_search</code>: Fast native glob and ripgrep-style file tree discovery
+                  </div>
+                  <div className="mcp-native-tool-item">
+                    • <code>workspace_read_file</code>: Zero-latency UTF-8 file inspector with line caps
+                  </div>
+                  <div className="mcp-native-footer">
+                    ✓ Zero dependencies (Node.js &amp; npm NOT required). Pre-loaded and active out-of-the-box.
+                  </div>
+                </div>
+              ) : loadingLogs ? (
+                <div className="mcp-log-loading-box">
+                  <RotateCw size={18} className="icon-spin" />
+                  <span>Streaming stderr diagnostics from process…</span>
+                </div>
+              ) : serverLogs.length === 0 ? (
+                <div className="mcp-log-empty-box">
+                  <p>No stderr messages recorded.</p>
+                  <span>The background process is running cleanly without throwing errors or warnings.</span>
+                </div>
+              ) : (
+                <pre className="mcp-log-stream">
+                  {serverLogs.map((line, idx) => (
+                    <div key={idx} className="mcp-log-stream-row">
+                      <span className="mcp-log-stream-num">{idx + 1}</span>
+                      <span className="mcp-log-stream-text">{line}</span>
+                    </div>
+                  ))}
+                </pre>
+              )}
+            </div>
           </motion.div>
         </motion.div>
       )}

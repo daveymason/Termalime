@@ -36,9 +36,12 @@ type PreflightState = {
 };
 
 const terminalTheme: ITerminalOptions["theme"] = {
-  background: "#05060a",
+  background: "#030604",
   foreground: "#f5f7fa",
-  cursor: "#7dd3fc",
+  cursor: "#a3e635",
+  cursorAccent: "#030604",
+  selectionBackground: "rgba(163, 230, 53, 0.3)",
+  selectionForeground: "#ffffff",
 };
 
 type TerminalProps = {
@@ -61,6 +64,7 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
   const preflightEnabledRef = useRef(settings.preflightCheck);
   const preflightModelRef = useRef(settings.preflightModel);
   const onSessionChangeRef = useRef(onSessionChange);
+  const copyOnSelectRef = useRef(settings.copyOnSelect);
   const [preflightState, setPreflightState] = useState<PreflightState>({
     status: "hidden",
     command: "",
@@ -74,6 +78,10 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
   const [searchQuery, setSearchQuery] = useState("");
   const [searchCaseSensitive, setSearchCaseSensitive] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    copyOnSelectRef.current = settings.copyOnSelect;
+  }, [settings.copyOnSelect]);
 
   useEffect(() => {
     preflightEnabledRef.current = settings.preflightCheck;
@@ -150,6 +158,15 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
     setPreflightState({ status: "hidden", command: "" });
   }, []);
 
+  const triggerContextRefresh = useCallback(() => {
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("termalime:refresh-context"));
+    }, 100);
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("termalime:refresh-context"));
+    }, 400);
+  }, []);
+
   const updateCommandBuffer = useCallback((chunk: string) => {
     for (const char of chunk) {
       if (char === "\r" || char === "\n") {
@@ -218,6 +235,7 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
             pendingPreflightActionRef.current?.();
             pendingPreflightActionRef.current = null;
             resetPreflight();
+            triggerContextRefresh();
             return;
           }
 
@@ -272,7 +290,8 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
     pendingPreflightActionRef.current = null;
     action();
     resetPreflight();
-  }, [resetPreflight, sendToPty]);
+    triggerContextRefresh();
+  }, [resetPreflight, sendToPty, triggerContextRefresh]);
 
   const handlePastedCommand = useCallback(
     (raw: string) => {
@@ -299,6 +318,9 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
       const forwardToPty = () => {
         updateCommandBuffer(normalized);
         sendToPty(normalized);
+        if (normalized.includes("\n") || normalized.includes("\r")) {
+          triggerContextRefresh();
+        }
       };
 
       if (!preflightEnabled) {
@@ -473,10 +495,13 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
 
     const term = new XTerm({
       convertEol: true,
-      cursorBlink: true,
-      fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+      cursorBlink: settings.cursorBlink ?? true,
+      cursorStyle: settings.cursorStyle || "block",
+      fontFamily: settings.terminalFontFamily || '"JetBrains Mono", "Fira Code", monospace',
       fontSize: settings.terminalFontSize,
+      lineHeight: settings.terminalLineHeight || 1.2,
       letterSpacing: 0.5,
+      scrollback: settings.scrollback || 5000,
       rows: 24,
       cols: 80,
       theme: terminalTheme,
@@ -526,6 +551,19 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
 
       updateCommandBuffer(data);
       sendToPty(data);
+
+      if (data.includes("\r") || data.includes("\n")) {
+        triggerContextRefresh();
+      }
+    });
+
+    const disposeSelection = term.onSelectionChange(() => {
+      if (copyOnSelectRef.current && term.hasSelection()) {
+        const text = term.getSelection();
+        if (text && text.trim().length > 0) {
+          navigator.clipboard.writeText(text).catch(() => {});
+        }
+      }
     });
 
     const handleDomPaste = (event: ClipboardEvent) => {
@@ -579,6 +617,7 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
     return () => {
       active = false;
       disposeData.dispose();
+      disposeSelection.dispose();
       containerEl?.removeEventListener("paste", handleDomPaste, true);
       observer.disconnect();
       if (resizeFrameRef.current) {
@@ -644,9 +683,22 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
       return;
     }
     termRef.current.options.fontSize = settings.terminalFontSize;
+    termRef.current.options.fontFamily = settings.terminalFontFamily || '"JetBrains Mono", "Fira Code", monospace';
+    termRef.current.options.lineHeight = settings.terminalLineHeight || 1.2;
+    termRef.current.options.cursorStyle = settings.cursorStyle || "block";
+    termRef.current.options.cursorBlink = settings.cursorBlink ?? true;
+    termRef.current.options.scrollback = settings.scrollback || 5000;
     termRef.current.refresh(0, termRef.current.rows - 1);
     queueResize();
-  }, [queueResize, settings.terminalFontSize]);
+  }, [
+    queueResize,
+    settings.terminalFontSize,
+    settings.terminalFontFamily,
+    settings.terminalLineHeight,
+    settings.cursorStyle,
+    settings.cursorBlink,
+    settings.scrollback,
+  ]);
 
   const preflightIndicatorTone =
     preflightState.status === "analyzing"
@@ -674,84 +726,80 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
     );
 
   return (
-    <section className="panel panel--terminal">
+    <div className="terminal-pane">
       {settings.preflightCheck && (
-        <header className="panel-header panel-header--stacked" style={{ borderBottom: "none", paddingBottom: 0, justifyContent: "flex-end", flexDirection: "row" }}>
-          <div style={{ marginLeft: "auto" }}>
-            <div className={preflightIndicatorTone}>
-              {preflightIndicatorIcon}
-              <span>{preflightIndicatorLabel}</span>
-            </div>
+        <div className="terminal-pane__preflight">
+          <div className={preflightIndicatorTone}>
+            {preflightIndicatorIcon}
+            <span>{preflightIndicatorLabel}</span>
           </div>
-        </header>
+        </div>
       )}
-      <div className="panel-content panel-content--terminal">
-        {searchOpen && (
-          <div className="terminal-search-bar" role="search">
-            <Search size={13} className="terminal-search-bar__icon" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              className="terminal-search-bar__input"
-              placeholder="Find in terminal..."
-              value={searchQuery}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  if (e.shiftKey) findPrevious();
-                  else findNext();
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  closeSearch();
-                }
-              }}
-            />
-            <button
-              type="button"
-              className={clsx(
-                "terminal-search-bar__btn",
-                searchCaseSensitive && "terminal-search-bar__btn--active"
-              )}
-              onClick={() => setSearchCaseSensitive(!searchCaseSensitive)}
-              title="Match Case"
-            >
-              Aa
-            </button>
-            <button
-              type="button"
-              className="terminal-search-bar__btn"
-              onClick={findPrevious}
-              title="Previous Match (Shift+Enter)"
-            >
-              <ChevronUp size={13} />
-            </button>
-            <button
-              type="button"
-              className="terminal-search-bar__btn"
-              onClick={findNext}
-              title="Next Match (Enter)"
-            >
-              <ChevronDown size={13} />
-            </button>
-            <button
-              type="button"
-              className="terminal-search-bar__btn"
-              onClick={closeSearch}
-              title="Close (Escape)"
-            >
-              <X size={13} />
-            </button>
-          </div>
-        )}
-        <div ref={containerRef} className="terminal-host" />
-        {status === "error" && (
-          <div className="panel-overlay panel-overlay--error">
-            <p>Unable to start the system shell.</p>
-            <p>Check Tauri logs for more details.</p>
-          </div>
-        )}
-      </div>
+      {searchOpen && (
+        <div className="terminal-search-bar" role="search">
+          <Search size={13} className="terminal-search-bar__icon" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            className="terminal-search-bar__input"
+            placeholder="Find in terminal..."
+            value={searchQuery}
+            onChange={(e) => handleSearchChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                if (e.shiftKey) findPrevious();
+                else findNext();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                closeSearch();
+              }
+            }}
+          />
+          <button
+            type="button"
+            className={clsx(
+              "terminal-search-bar__btn",
+              searchCaseSensitive && "terminal-search-bar__btn--active"
+            )}
+            onClick={() => setSearchCaseSensitive(!searchCaseSensitive)}
+            title="Match Case"
+          >
+            Aa
+          </button>
+          <button
+            type="button"
+            className="terminal-search-bar__btn"
+            onClick={findPrevious}
+            title="Previous Match (Shift+Enter)"
+          >
+            <ChevronUp size={13} />
+          </button>
+          <button
+            type="button"
+            className="terminal-search-bar__btn"
+            onClick={findNext}
+            title="Next Match (Enter)"
+          >
+            <ChevronDown size={13} />
+          </button>
+          <button
+            type="button"
+            className="terminal-search-bar__btn"
+            onClick={closeSearch}
+            title="Close (Escape)"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
+      <div ref={containerRef} className="terminal-host" />
+      {status === "error" && (
+        <div className="panel-overlay panel-overlay--error">
+          <p>Unable to start the system shell.</p>
+          <p>Check Tauri logs for more details.</p>
+        </div>
+      )}
       <PreflightModal
         command={preflightState.command}
         status={preflightState.status}
@@ -760,7 +808,7 @@ const Terminal = ({ onSessionChange, active = true, initialCwd }: TerminalProps)
         onCancel={handlePreflightCancel}
         onRunAnyway={handlePreflightRun}
       />
-    </section>
+    </div>
   );
 };
 

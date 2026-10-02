@@ -292,9 +292,8 @@ export default function CommandsButton({ onRunCommand }: CommandsButtonProps) {
 
   return (
     <>
-      <button className="context-btn" onClick={() => setOpen(true)}>
+      <button className="context-btn" onClick={() => setOpen(true)} title="Saved Commands" aria-label="Saved Commands">
         <TerminalSquare size={14} />
-        <span>Commands</span>
       </button>
       <CommandsPanel open={open} onClose={() => setOpen(false)} onRunCommand={onRunCommand} />
     </>

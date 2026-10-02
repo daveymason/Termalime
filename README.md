@@ -78,16 +78,43 @@ PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:$PKG_CO
 3. Install the `.deb` locally:
 
 ```bash
-sudo apt install ./src-tauri/target/release/bundle/deb/Termalime_0.6.0_amd64.deb
+sudo apt install ./src-tauri/target/release/bundle/deb/Termalime_0.7.0_amd64.deb
 ```
 
 Artifacts land under `src-tauri/target/release/bundle/`:
 
-- `deb/Termalime_0.6.0_amd64.deb` → install with `apt`
-- `appimage/Termalime_0.6.0_amd64.AppImage` → `chmod +x` then run directly
-- `rpm/Termalime-0.6.0-1.x86_64.rpm` → for Fedora/RHEL friends
+- `deb/Termalime_0.7.0_amd64.deb` → install with `apt`
+- `appimage/Termalime_0.7.0_amd64.AppImage` → `chmod +x` then run directly
+- `rpm/Termalime-0.7.0-1.x86_64.rpm` → for Fedora/RHEL friends
 
 Adjust `bundle.targets` or metadata inside `src-tauri/tauri.conf.json` if you only need specific formats or want to bump versions.
+
+### V0.7 Released - October 2026 - Codename: Protocol
+- **Model Context Protocol (MCP) Integration**:
+  - Full client support for external stdio MCP tool servers (`~/.config/termalime/mcp.json`)
+  - 1-Click Starter Presets: Filesystem, Memory Graph, Reasoning Engine, and Web Fetch
+  - Interactive **Tool Explorer & Schema Inspector** drawer on each server card for parameter inspection
+  - **Server Diagnostics & Stderr Log Viewer** modal capturing live process stderr with one-click copy
+- **Native Rust MCP Tools (Zero Dependencies)**:
+  - Built-in `termalime` server running directly in-process within Termalime's binary (<1ms latency)
+  - `terminal_run_command`: Bash command execution with timeout control
+  - `workspace_search`: Native file matching and glob search (ignoring `node_modules`, `target`, `.git`)
+  - `workspace_read_file`: Zero-latency UTF-8 file inspector with line caps
+- **Performance Telemetry**:
+  - Real-time token generation speed (tok/s) and Time-to-First-Token (TTFT) metrics displayed on assistant messages
+- **Configurable Ollama Gateway**:
+  - Configurable Ollama host in Settings with instant connectivity test, unblocking remote rigs and LAN setups
+- **Terminal Customization Suite & Control Room**:
+  - Typography selector (`JetBrains Mono`, `Fira Code`, `Cascadia Code`, `Source Code Pro`, system default)
+  - Font size slider and line height controls
+  - Cursor shape selector (`Block`, `Beam`, `Underline`) and blink toggling
+  - Linux/X11-style "Copy on select" toggle and configurable scrollback depth
+  - Re-designed Model Selector Modal with search, category filtering, and fast keyboard navigation
+  - Live `/proc/{pid}/cwd` shell process and git branch tracking in status bar
+- **Linux Distribution Standards**:
+  - Ubuntu App Center Snap package (`snap/snapcraft.yaml`)
+  - AppStream AppData metadata (`com.termalime.Termalime.metainfo.xml`)
+  - AppImage `.zsync` delta updates
 
 ### V0.6 Released - September 26 - Codename: Bridge
 - **Interactive AI Code Blocks (Chat → Shell)**:

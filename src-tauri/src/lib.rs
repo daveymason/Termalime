@@ -1,7 +1,15 @@
-pub mod pty;
 pub mod mcp;
+pub mod pty;
 
-use std::{collections::HashMap, io::Read, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    io::Read,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tokio::sync::Mutex;
 
 const TERMINAL_BUFFER_MAX: usize = 16 * 1024;
@@ -79,6 +87,7 @@ struct AppState {
     system_info: Arc<std::sync::Mutex<sysinfo::System>>,
     ollama_host: Arc<tokio::sync::RwLock<String>>,
     mcp_manager: mcp::McpManager,
+    chat_abort: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -107,6 +116,7 @@ impl Default for AppState {
             system_info: Arc::new(std::sync::Mutex::new(sys)),
             ollama_host: Arc::new(tokio::sync::RwLock::new(initial_ollama_host())),
             mcp_manager: mcp::McpManager::default(),
+            chat_abort: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -392,6 +402,11 @@ async fn spawn_pty(
 #[tauri::command]
 async fn write_to_pty(request: WriteRequest) -> Result<(), String> {
     let WriteRequest { session_id, data } = request;
+    if data.contains('\r') || data.contains('\n') {
+        if let Ok(mut cache) = GIT_BRANCH_CACHE.lock() {
+            cache.clear();
+        }
+    }
     let bytes = data.into_bytes();
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -516,12 +531,17 @@ async fn ask_ollama(
         "content": user_prompt,
     }));
 
+    state.chat_abort.store(false, Ordering::SeqCst);
+
     let tools_schema = state.mcp_manager.get_ollama_tools_schema().await;
 
     let max_tool_iterations = 4;
     let mut iteration = 0;
 
     while iteration < max_tool_iterations {
+        if state.chat_abort.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         iteration += 1;
 
         let mut body = json!({
@@ -568,6 +588,9 @@ async fn ask_ollama(
         let mut collected_tool_calls: Vec<OllamaToolCall> = Vec::new();
 
         while let Some(chunk) = stream.next().await {
+            if state.chat_abort.load(Ordering::SeqCst) {
+                return Ok(());
+            }
             let data = chunk.map_err(|err| err.to_string())?;
             buffer.extend_from_slice(&data);
             process_ollama_buffer(&app_handle, &mut buffer, &mut collected_tool_calls)?;
@@ -602,25 +625,42 @@ async fn ask_ollama(
         }));
 
         for tc in &collected_tool_calls {
+            if state.chat_abort.load(Ordering::SeqCst) {
+                return Ok(());
+            }
             let raw_name = &tc.function.name;
             let parts: Vec<&str> = raw_name.split("__").collect();
             let server_name = parts[0];
-            let tool_name = if parts.len() > 1 { parts[1..].join("__") } else { raw_name.to_string() };
+            let tool_name = if parts.len() > 1 {
+                parts[1..].join("__")
+            } else {
+                raw_name.to_string()
+            };
 
-            let res = state.mcp_manager.call_tool(server_name, &tool_name, tc.function.arguments.clone()).await;
+            let res = state
+                .mcp_manager
+                .call_tool(server_name, &tool_name, tc.function.arguments.clone())
+                .await;
             let (res_str, is_err, dur) = match res {
-                Ok(r) => (serde_json::to_string(&r.content).unwrap_or_default(), r.is_error, r.duration_ms),
+                Ok(r) => (
+                    serde_json::to_string(&r.content).unwrap_or_default(),
+                    r.is_error,
+                    r.duration_ms,
+                ),
                 Err(e) => (format!("Error executing tool: {}", e), true, 0),
             };
 
-            let _ = app_handle.emit("mcp-tool-result", json!({
-                "raw_name": raw_name,
-                "server_name": server_name,
-                "tool_name": tool_name,
-                "duration_ms": dur,
-                "is_error": is_err,
-                "content": res_str,
-            }));
+            let _ = app_handle.emit(
+                "mcp-tool-result",
+                json!({
+                    "raw_name": raw_name,
+                    "server_name": server_name,
+                    "tool_name": tool_name,
+                    "duration_ms": dur,
+                    "is_error": is_err,
+                    "content": res_str,
+                }),
+            );
 
             messages.push(json!({
                 "role": "tool",
@@ -629,6 +669,12 @@ async fn ask_ollama(
         }
     }
 
+    Ok(())
+}
+
+#[tauri::command]
+async fn abort_chat(state: State<'_, AppState>) -> Result<(), String> {
+    state.chat_abort.store(true, Ordering::SeqCst);
     Ok(())
 }
 
@@ -695,10 +741,10 @@ fn is_git_available() -> bool {
     })
 }
 
-const GIT_BRANCH_CACHE_TTL: Duration = Duration::from_secs(30);
+const GIT_BRANCH_CACHE_TTL: Duration = Duration::from_millis(800);
 
-static GIT_BRANCH_CACHE: Lazy<std::sync::Mutex<Option<(std::time::Instant, Option<String>)>>> =
-    Lazy::new(|| std::sync::Mutex::new(None));
+static GIT_BRANCH_CACHE: Lazy<std::sync::Mutex<HashMap<String, (std::time::Instant, Option<String>)>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 fn detect_git_branch(cwd: Option<&str>) -> Option<String> {
     use std::process::Command;
@@ -707,69 +753,83 @@ fn detect_git_branch(cwd: Option<&str>) -> Option<String> {
         return None;
     }
 
-    let run = |dir: &std::path::Path| {
+    let dir = cwd.map(std::path::Path::new)?;
+
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+
+    if s == "HEAD" {
+        // Detached HEAD: show short hash instead of literal "HEAD"
         Command::new("git")
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .args(["rev-parse", "--short", "HEAD"])
             .current_dir(dir)
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .output()
             .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    };
-
-    // Try from the executable's directory first (likely the project): go up
-    // from target/debug to the project root.
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-
-    exe_dir
-        .as_deref()
-        .and_then(run)
-        .or_else(|| cwd.map(std::path::Path::new).and_then(run))
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .filter(|h| !h.is_empty())
+            .map(|h| format!(":{}", h))
+    } else {
+        Some(s)
+    }
 }
 
-/// The branch rarely changes, so don't fork `git` on every 5s context poll.
+/// The branch rarely changes, so don't fork `git` on every context poll.
 fn cached_git_branch(cwd: Option<&str>) -> Option<String> {
+    let dir = match cwd {
+        Some(d) if !d.trim().is_empty() => d,
+        _ => return None,
+    };
+
+    let key = dir.to_string();
     {
         let cache = GIT_BRANCH_CACHE.lock().expect("git branch cache poisoned");
-        if let Some((checked_at, branch)) = cache.as_ref() {
+        if let Some((checked_at, branch)) = cache.get(&key) {
             if checked_at.elapsed() < GIT_BRANCH_CACHE_TTL {
                 return branch.clone();
             }
         }
     }
 
-    let branch = detect_git_branch(cwd);
-    *GIT_BRANCH_CACHE.lock().expect("git branch cache poisoned") =
-        Some((std::time::Instant::now(), branch.clone()));
+    let branch = detect_git_branch(Some(dir));
+    let mut cache = GIT_BRANCH_CACHE.lock().expect("git branch cache poisoned");
+    cache.insert(key, (std::time::Instant::now(), branch.clone()));
     branch
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 async fn get_system_context(
     state: State<'_, AppState>,
-    _session_id: Option<String>,
+    session_id: Option<String>,
 ) -> Result<SystemContext, String> {
     use std::env;
 
-    let username = env::var("USER")
-        .or_else(|_| env::var("USERNAME"))
-        .ok();
+    let username = env::var("USER").or_else(|_| env::var("USERNAME")).ok();
 
     let shell = env::var("SHELL")
         .ok()
         .and_then(|s| s.split('/').last().map(String::from));
 
-    let cwd = env::current_dir()
-        .ok()
-        .and_then(|p| p.to_str().map(String::from));
+    // Resolve cwd from the active terminal session, with fallback to HOME
+    let terminal_cwd = pty::PTY_REGISTRY.get_session_cwd(session_id.as_deref());
+
+    let cwd = terminal_cwd.clone().or_else(|| env::var("HOME").ok());
 
     // Subprocess spawns and sysinfo refreshes block, so keep them off the
     // async runtime's worker threads.
@@ -823,7 +883,7 @@ async fn get_system_context(
 
 fn get_local_ip() -> Option<String> {
     use std::net::UdpSocket;
-    
+
     // Create a UDP socket and "connect" to a public address
     // This doesn't actually send data, just determines the local interface
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
@@ -878,7 +938,11 @@ async fn analyze_command(
     state: State<'_, AppState>,
     request: AnalyzeCommandRequest,
 ) -> Result<AnalyzeCommandResponse, String> {
-    let AnalyzeCommandRequest { command, model, host } = request;
+    let AnalyzeCommandRequest {
+        command,
+        model,
+        host,
+    } = request;
     let command = command.trim().to_string();
     if command.is_empty() {
         return Ok(AnalyzeCommandResponse {
@@ -966,10 +1030,12 @@ async fn analyze_command(
 
     let parsed_report: Option<PreflightReport> = match parse_preflight_report(content) {
         Ok(report) => Some(report),
-        Err(parse_error) => match repair_preflight_report(&app_handle, &resolved_model, &ollama_host, content).await {
-            Ok(Some(report)) => Some(report),
-            Ok(None) => {
-                let assessment = fallback_text_summary(&app_handle, &resolved_model, &ollama_host, &command, content, Some(&parse_error))
+        Err(parse_error) => {
+            match repair_preflight_report(&app_handle, &resolved_model, &ollama_host, content).await
+            {
+                Ok(Some(report)) => Some(report),
+                Ok(None) => {
+                    let assessment = fallback_text_summary(&app_handle, &resolved_model, &ollama_host, &command, content, Some(&parse_error))
                     .await
                     .unwrap_or_else(|fallback_error| {
                         format!(
@@ -980,33 +1046,33 @@ async fn analyze_command(
                         )
                     });
 
-                if let Some(mut report) = assessment_text_to_report(&assessment) {
-                    if let Some(note) = heuristic_note.as_deref() {
-                        report.risk_reason = format!("{}\n\n{}", report.risk_reason, note);
+                    if let Some(mut report) = assessment_text_to_report(&assessment) {
+                        if let Some(note) = heuristic_note.as_deref() {
+                            report.risk_reason = format!("{}\n\n{}", report.risk_reason, note);
+                        }
+                        return Ok(AnalyzeCommandResponse {
+                            action: AnalyzeAction::Review,
+                            report: Some(report),
+                            message: None,
+                            score,
+                        });
                     }
+
+                    let message = if let Some(note) = heuristic_note.as_deref() {
+                        format!("{}\n\n{}", assessment, note)
+                    } else {
+                        assessment
+                    };
+
                     return Ok(AnalyzeCommandResponse {
                         action: AnalyzeAction::Review,
-                        report: Some(report),
-                        message: None,
+                        report: None,
+                        message: Some(message),
                         score,
                     });
                 }
-
-                let message = if let Some(note) = heuristic_note.as_deref() {
-                    format!("{}\n\n{}", assessment, note)
-                } else {
-                    assessment
-                };
-
-                return Ok(AnalyzeCommandResponse {
-                    action: AnalyzeAction::Review,
-                    report: None,
-                    message: Some(message),
-                    score,
-                });
-            }
-            Err(repair_error) => {
-                let assessment = fallback_text_summary(&app_handle, &resolved_model, &ollama_host, &command, content, Some(&parse_error))
+                Err(repair_error) => {
+                    let assessment = fallback_text_summary(&app_handle, &resolved_model, &ollama_host, &command, content, Some(&parse_error))
                     .await
                     .unwrap_or_else(|fallback_error| {
                         format!(
@@ -1018,32 +1084,33 @@ async fn analyze_command(
                         )
                     });
 
-                if let Some(mut report) = assessment_text_to_report(&assessment) {
-                    if let Some(note) = heuristic_note.as_deref() {
-                        report.risk_reason = format!("{}\n\n{}", report.risk_reason, note);
+                    if let Some(mut report) = assessment_text_to_report(&assessment) {
+                        if let Some(note) = heuristic_note.as_deref() {
+                            report.risk_reason = format!("{}\n\n{}", report.risk_reason, note);
+                        }
+                        return Ok(AnalyzeCommandResponse {
+                            action: AnalyzeAction::Review,
+                            report: Some(report),
+                            message: None,
+                            score,
+                        });
                     }
+
+                    let message = if let Some(note) = heuristic_note.as_deref() {
+                        format!("{}\n\n{}", assessment, note)
+                    } else {
+                        assessment
+                    };
+
                     return Ok(AnalyzeCommandResponse {
                         action: AnalyzeAction::Review,
-                        report: Some(report),
-                        message: None,
+                        report: None,
+                        message: Some(message),
                         score,
                     });
                 }
-
-                let message = if let Some(note) = heuristic_note.as_deref() {
-                    format!("{}\n\n{}", assessment, note)
-                } else {
-                    assessment
-                };
-
-                return Ok(AnalyzeCommandResponse {
-                    action: AnalyzeAction::Review,
-                    report: None,
-                    message: Some(message),
-                    score,
-                });
             }
-        },
+        }
     };
 
     if let Some(report) = parsed_report {
@@ -1685,10 +1752,7 @@ fn spawn_terminal_reader(
 }
 
 fn normalize_command_heuristics(command: &str) -> String {
-    command
-        .replace('"', "")
-        .replace('\'', "")
-        .replace('\\', "")
+    command.replace('"', "").replace('\'', "").replace('\\', "")
 }
 
 fn is_destructive_rm(command: &str) -> bool {
@@ -2006,7 +2070,9 @@ mod tests {
     #[test]
     fn ignores_pipes_without_a_downloader_or_interpreter() {
         assert!(!contains_piped_interpreter("cat notes.txt | grep todo"));
-        assert!(!contains_piped_interpreter("curl https://x.json | jq '.name'"));
+        assert!(!contains_piped_interpreter(
+            "curl https://x.json | jq '.name'"
+        ));
         assert!(!contains_piped_interpreter("echo hi | bash")); // no downloader
     }
 
@@ -2081,7 +2147,10 @@ mod tests {
 
     #[test]
     fn parses_report_embedded_in_prose() {
-        let chatty = format!("Sure! Here is the analysis:\n{}\nLet me know!", valid_report_json());
+        let chatty = format!(
+            "Sure! Here is the analysis:\n{}\nLet me know!",
+            valid_report_json()
+        );
         let report = parse_preflight_report(&chatty).expect("should extract embedded JSON");
         assert_eq!(report.summary, "Lists files");
     }
@@ -2104,7 +2173,8 @@ mod tests {
 
     #[test]
     fn repairs_double_quotes_inside_backticks() {
-        let nested = r#"{"summary": "Runs `"rm"` on a path", "is_risky": true, "risk_reason": "Deletion"}"#;
+        let nested =
+            r#"{"summary": "Runs `"rm"` on a path", "is_risky": true, "risk_reason": "Deletion"}"#;
         let report = parse_preflight_report(nested).expect("should repair backtick quotes");
         assert!(report.summary.contains("'rm'"));
     }
@@ -2119,7 +2189,10 @@ mod tests {
 
     #[test]
     fn strip_code_fence_handles_json_and_bare_fences() {
-        assert_eq!(strip_code_fence("```json\n{\"a\":1}\n```").as_deref(), Some("{\"a\":1}"));
+        assert_eq!(
+            strip_code_fence("```json\n{\"a\":1}\n```").as_deref(),
+            Some("{\"a\":1}")
+        );
         assert_eq!(strip_code_fence("```\ntext\n```").as_deref(), Some("text"));
         assert_eq!(strip_code_fence("no fence here"), None);
     }
@@ -2127,7 +2200,10 @@ mod tests {
     #[test]
     fn extract_json_object_returns_outermost_braces() {
         let raw = "prefix {\"a\": {\"nested\": true}} suffix";
-        assert_eq!(extract_json_object(raw).as_deref(), Some("{\"a\": {\"nested\": true}}"));
+        assert_eq!(
+            extract_json_object(raw).as_deref(),
+            Some("{\"a\": {\"nested\": true}}")
+        );
         assert_eq!(extract_json_object("no braces"), None);
         assert_eq!(extract_json_object("{unclosed"), None);
     }
@@ -2167,7 +2243,10 @@ mod tests {
     fn recommendation_line_becomes_safe_alternative() {
         let text = "Summary: Force-deletes a directory\nLikelihood of maliciousness: 60%\nRationale: Irreversible\nRecommendation: Move it to the trash instead";
         let report = assessment_text_to_report(text).expect("should build report");
-        assert_eq!(report.safe_alternative.as_deref(), Some("Move it to the trash instead"));
+        assert_eq!(
+            report.safe_alternative.as_deref(),
+            Some("Move it to the trash instead")
+        );
     }
 
     #[test]
@@ -2194,15 +2273,24 @@ mod tests {
 
     #[test]
     fn normalize_strips_quotes_and_escapes() {
-        assert_eq!(normalize_command_heuristics(r#"echo "hi \'there\'""#), "echo hi there");
+        assert_eq!(
+            normalize_command_heuristics(r#"echo "hi \'there\'""#),
+            "echo hi there"
+        );
     }
 
     #[test]
     fn resolves_ollama_urls_properly() {
         assert_eq!(resolve_ollama_url(""), "http://127.0.0.1:11434");
         assert_eq!(resolve_ollama_url("   "), "http://127.0.0.1:11434");
-        assert_eq!(resolve_ollama_url("192.168.1.100:11434/"), "http://192.168.1.100:11434");
-        assert_eq!(resolve_ollama_url("https://remote.ollama.lan:443/"), "https://remote.ollama.lan:443");
+        assert_eq!(
+            resolve_ollama_url("192.168.1.100:11434/"),
+            "http://192.168.1.100:11434"
+        );
+        assert_eq!(
+            resolve_ollama_url("https://remote.ollama.lan:443/"),
+            "https://remote.ollama.lan:443"
+        );
     }
 
     #[test]
@@ -2233,11 +2321,23 @@ async fn get_last_command_output(
     Ok(snapshot.extract_last_command_output())
 }
 
-#[tauri::command]
-async fn get_workspace_tree(cwd: Option<String>, max_depth: Option<usize>) -> Result<String, String> {
+#[tauri::command(rename_all = "snake_case")]
+async fn get_workspace_tree(
+    session_id: Option<String>,
+    cwd: Option<String>,
+    max_depth: Option<usize>,
+) -> Result<String, String> {
     let dir = match cwd {
         Some(c) if !c.trim().is_empty() => std::path::PathBuf::from(c),
-        _ => std::env::current_dir().map_err(|e| e.to_string())?,
+        _ => {
+            let term_cwd = pty::PTY_REGISTRY.get_session_cwd(session_id.as_deref());
+            match term_cwd {
+                Some(p) => std::path::PathBuf::from(p),
+                None => std::env::var("HOME")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            }
+        }
     };
     let depth = max_depth.unwrap_or(2).min(5);
     generate_workspace_tree(&dir, depth)
@@ -2293,7 +2393,13 @@ fn build_tree_recursive(
         let path = entry.path();
         let is_dir = path.is_dir();
 
-        output.push_str(&format!("{}{}{}{}\n", prefix, connector, name_str, if is_dir { "/" } else { "" }));
+        output.push_str(&format!(
+            "{}{}{}{}\n",
+            prefix,
+            connector,
+            name_str,
+            if is_dir { "/" } else { "" }
+        ));
 
         if is_dir && current_depth < max_depth {
             let next_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
@@ -2304,12 +2410,34 @@ fn build_tree_recursive(
     Ok(())
 }
 
-#[tauri::command]
-async fn get_git_status(cwd: Option<String>) -> Result<String, String> {
+#[tauri::command(rename_all = "snake_case")]
+async fn get_git_status(
+    session_id: Option<String>,
+    cwd: Option<String>,
+) -> Result<String, String> {
     let dir = match cwd {
         Some(c) if !c.trim().is_empty() => std::path::PathBuf::from(c),
-        _ => std::env::current_dir().map_err(|e| e.to_string())?,
+        _ => {
+            let term_cwd = pty::PTY_REGISTRY.get_session_cwd(session_id.as_deref());
+            match term_cwd {
+                Some(p) => std::path::PathBuf::from(p),
+                None => return Ok(String::new()),
+            }
+        }
     };
+
+    let is_repo = std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !is_repo {
+        return Ok(String::new());
+    }
 
     let status_output = std::process::Command::new("git")
         .arg("status")
@@ -2324,7 +2452,7 @@ async fn get_git_status(cwd: Option<String>) -> Result<String, String> {
         .output();
 
     match (status_output, diff_output) {
-        (Ok(s), Ok(d)) => {
+        (Ok(s), Ok(d)) if s.status.success() => {
             let status_str = String::from_utf8_lossy(&s.stdout);
             let diff_str = String::from_utf8_lossy(&d.stdout);
             let branch = std::process::Command::new("git")
@@ -2352,7 +2480,7 @@ async fn get_git_status(cwd: Option<String>) -> Result<String, String> {
             }
             Ok(res)
         }
-        _ => Err("Git is not available or directory is not a git repository".to_string()),
+        _ => Ok(String::new()),
     }
 }
 
@@ -2367,7 +2495,9 @@ async fn mcp_save_config(config: mcp::McpConfigFile) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn mcp_get_servers_status(state: State<'_, AppState>) -> Result<Vec<mcp::McpServerInfo>, String> {
+async fn mcp_get_servers_status(
+    state: State<'_, AppState>,
+) -> Result<Vec<mcp::McpServerInfo>, String> {
     Ok(state.mcp_manager.get_servers_status().await)
 }
 
@@ -2377,6 +2507,23 @@ async fn mcp_restart_server(
     server_id: String,
 ) -> Result<mcp::McpServerInfo, String> {
     state.mcp_manager.restart_server(&server_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn mcp_toggle_server(
+    state: State<'_, AppState>,
+    server_id: String,
+    disabled: bool,
+) -> Result<mcp::McpServerInfo, String> {
+    state.mcp_manager.toggle_server(&server_id, disabled).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn mcp_delete_server(
+    state: State<'_, AppState>,
+    server_id: String,
+) -> Result<(), String> {
+    state.mcp_manager.remove_server(&server_id).await
 }
 
 #[tauri::command]
@@ -2391,7 +2538,26 @@ async fn mcp_call_tool(
     tool_name: String,
     arguments: serde_json::Value,
 ) -> Result<mcp::McpCallResult, String> {
-    state.mcp_manager.call_tool(&server_id, &tool_name, arguments).await
+    state
+        .mcp_manager
+        .call_tool(&server_id, &tool_name, arguments)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn mcp_get_server_logs(
+    state: State<'_, AppState>,
+    server_id: String,
+) -> Result<Vec<String>, String> {
+    Ok(state.mcp_manager.get_server_logs(&server_id).await)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn mcp_get_server_tools(
+    state: State<'_, AppState>,
+    server_id: String,
+) -> Result<Vec<mcp::McpToolInfo>, String> {
+    Ok(state.mcp_manager.get_server_tools(&server_id).await)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2419,6 +2585,7 @@ pub fn run() {
             write_to_pty,
             resize_pty,
             ask_ollama,
+            abort_chat,
             check_ollama,
             list_ollama_models,
             get_terminal_context,
@@ -2434,8 +2601,12 @@ pub fn run() {
             mcp_save_config,
             mcp_get_servers_status,
             mcp_restart_server,
+            mcp_toggle_server,
+            mcp_delete_server,
             mcp_list_tools,
-            mcp_call_tool
+            mcp_call_tool,
+            mcp_get_server_logs,
+            mcp_get_server_tools
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

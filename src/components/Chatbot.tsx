@@ -6,12 +6,13 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
-  FolderTree,
-  GitBranch,
   Loader2,
+  Mic,
+  Paperclip,
   Play,
   RefreshCcw,
   SendHorizonal,
+  Square,
   TerminalSquare,
   Trash2,
   UserRound,
@@ -21,7 +22,7 @@ import { FormEvent, KeyboardEvent, memo, useCallback, useEffect, useRef, useStat
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { PERSONA_DESCRIPTIONS, useSettings } from "../state/settings";
-import { ContextChipsState, DEFAULT_CONTEXT_CHIPS, gatherActiveContext } from "../state/context";
+import ModelSelectorModal from "./ModelSelectorModal";
 
 type ChatRole = "user" | "assistant";
 
@@ -148,7 +149,7 @@ const CodeBlock = ({ className, children, ...props }: CodeBlockProps) => {
             onClick={handleCopy}
             title="Copy command snippet"
           >
-            {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+            {copied ? <Check size={12} style={{ color: "var(--matrix-neon)" }} /> : <Copy size={12} />}
             <span>{copied ? "Copied" : "Copy"}</span>
           </button>
           <button
@@ -264,7 +265,7 @@ const MessageItem = memo(({ message, onCopy, onDelete }: MessageItemProps) => {
             )}
             {message.telemetry.ttftMs != null && message.telemetry.ttftMs > 0 && (
               <span className="telemetry-badge" title="Time to first token">
-                {message.telemetry.ttftMs}ms TTFT
+                {parseFloat((message.telemetry.ttftMs / 1000).toFixed(2))}s TTFT
               </span>
             )}
           </span>
@@ -286,7 +287,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
   const [loadingModels, setLoadingModels] = useState(false);
   const [ollamaOnline, setOllamaOnline] = useState<boolean | null>(null);
   const [checkingOllama, setCheckingOllama] = useState(false);
-  const [contextChips, setContextChips] = useState<ContextChipsState>(DEFAULT_CONTEXT_CHIPS);
+  const [modelModalOpen, setModelModalOpen] = useState(false);
   const responseIdRef = useRef<string | null>(null);
   const responseBufferRef = useRef<string>("");
   const promptStartTimeRef = useRef<number>(0);
@@ -697,17 +698,6 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
       }
     }
 
-    try {
-      const extraContext = await gatherActiveContext(sessionId, contextChips);
-      if (extraContext.trim()) {
-        terminalContext = terminalContext
-          ? `${terminalContext}\n\n${extraContext.trim()}`
-          : extraContext.trim();
-      }
-    } catch (error) {
-      console.warn("Unable to gather workspace context", error);
-    }
-
     const personaDescription = PERSONA_DESCRIPTIONS[settings.persona];
     const personaPrompt = `Persona directive: Adopt the ${settings.persona} persona – ${personaDescription}`;
     const systemPrompt = settings.systemPrompt?.trim();
@@ -773,7 +763,6 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     }
   }, [
     checkingOllama,
-    contextChips,
     input,
     isStreaming,
     model,
@@ -783,6 +772,36 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     sessionId,
     settings,
   ]);
+
+  const handleStop = useCallback(async () => {
+    try {
+      await invoke("abort_chat");
+    } catch (err) {
+      console.warn("Failed to abort chat:", err);
+    }
+    setIsStreaming(false);
+    if (responseIdRef.current) {
+      const activeId = responseIdRef.current;
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === activeId
+            ? {
+                ...msg,
+                pending: false,
+                content: msg.content || "Generation stopped.",
+                toolCalls: msg.toolCalls?.map((t) =>
+                  t.status === "running"
+                    ? { ...t, status: "error", details: "Cancelled by user" }
+                    : t
+                ),
+              }
+            : msg
+        )
+      );
+    }
+    responseIdRef.current = null;
+    responseBufferRef.current = "";
+  }, []);
 
   useEffect(() => {
     const handleAskAssistant = async (event: Event) => {
@@ -863,61 +882,6 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
 
   return (
     <section className="panel panel--chatbot">
-      <header className="panel-header panel-header--chat">
-        <div className="panel-heading panel-heading--chat">
-          <div className="panel-heading__title-main">
-            <Bot size={18} />
-            <div className="panel-heading__title-stack">
-              <p className="panel-label">Lime Copilot</p>
-              <p className="panel-subtitle panel-subtitle--status">
-                <span className={`status-dot ${statusTone}`} />
-                <span className="status-text">{statusText}</span>
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="panel-header__controls panel-header__controls--chat">
-          <div className="model-select model-select--compact">
-            <label htmlFor="model-select" className="sr-only">
-              Model
-            </label>
-            <div className="model-select__input">
-              <select
-                id="model-select"
-                value={model}
-                onChange={(event) => setModel(event.currentTarget.value)}
-                disabled={
-                  loadingModels ||
-                  ollamaOnline === false ||
-                  modelOptions.length === 0
-                }
-              >
-                {modelOptions.length === 0 ? (
-                  <option value="">No models</option>
-                ) : (
-                  modelOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))
-                )}
-              </select>
-              <button
-                type="button"
-                onClick={() => refreshModels().catch((error) => console.error(error))}
-                disabled={loadingModels || ollamaOnline === false}
-                aria-label="Refresh models"
-              >
-                {loadingModels ? (
-                  <Loader2 size={14} className="icon-spin" />
-                ) : (
-                  <RefreshCcw size={14} />
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
       <div className="panel-content panel-content--chatbot">
         {ollamaOnline === false && (
           <div className="chat-alert">
@@ -943,7 +907,11 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
         <div className="chat-scroll">
           {messages.length === 0 && (
             <div className="placeholder">
-              Send a prompt to start a conversation with your local Ollama model.
+              <Bot size={28} className="placeholder__icon" />
+              <p className="placeholder__title">Copilot</p>
+              <p className="placeholder__desc">
+                Send a prompt or ask for terminal assistance with your local model.
+              </p>
             </div>
           )}
           {messages.map((message) => (
@@ -957,59 +925,91 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
           <div ref={bottomRef} />
         </div>
 
-        <div className="chat-context-chips">
-          <button
-            type="button"
-            className={clsx("chat-chip", contextChips.lastCommand && "chat-chip--active")}
-            onClick={() => setContextChips((prev) => ({ ...prev, lastCommand: !prev.lastCommand }))}
-            title="Attach output of the most recent terminal command"
-          >
-            <TerminalSquare size={12} />
-            <span>Last Output</span>
-          </button>
-          <button
-            type="button"
-            className={clsx("chat-chip", contextChips.gitStatus && "chat-chip--active")}
-            onClick={() => setContextChips((prev) => ({ ...prev, gitStatus: !prev.gitStatus }))}
-            title="Attach git status and working tree diff"
-          >
-            <GitBranch size={12} />
-            <span>Git Diff</span>
-          </button>
-          <button
-            type="button"
-            className={clsx("chat-chip", contextChips.cwdTree && "chat-chip--active")}
-            onClick={() => setContextChips((prev) => ({ ...prev, cwdTree: !prev.cwdTree }))}
-            title="Attach workspace directory structure"
-          >
-            <FolderTree size={12} />
-            <span>Directory Tree</span>
-          </button>
-        </div>
-
         <form className="chat-input" onSubmit={handleSubmit}>
           <textarea
             value={input}
             onChange={(event) => setInput(event.currentTarget.value)}
-            placeholder="Ask Lime..."
+            placeholder="Ask Copilot..."
             rows={3}
             onKeyDown={handleKeyDown}
             disabled={ollamaOnline === false}
           />
-          <button type="submit" disabled={sendDisabled}>
-            {isStreaming ? (
-              <span className="chat-button__content">
-                <Loader2 size={16} className="icon-spin" />
-              </span>
-            ) : (
-              <span className="chat-button__content">
-                <SendHorizonal size={16} />
-              </span>
-            )}
-          </button>
+          <div className="chat-input__actions">
+            <div className="chat-input__left-actions">
+              <button
+                type="button"
+                className="chat-model-btn"
+                onClick={() => setModelModalOpen(true)}
+                title={`Active Model: ${model || "None"} (${statusText}). Click to select or refresh models.`}
+              >
+                <div className="chat-model-btn__icon-wrapper">
+                  <Bot size={14} className="chat-model-btn__icon" />
+                  <span className={`status-dot ${statusTone} chat-model-btn__status-dot`} />
+                </div>
+                <span className="chat-model-btn__name">{model || "Select Model"}</span>
+                <ChevronDown size={12} className="chat-model-btn__chevron" />
+              </button>
+            </div>
+            <div className="chat-input__right-actions">
+              <button
+                type="button"
+                className="chat-icon-action"
+                title="Attach image or document (Multimodal feature)"
+                disabled
+              >
+                <Paperclip size={14} />
+              </button>
+              <button
+                type="button"
+                className="chat-icon-action"
+                title="Voice input"
+                disabled
+              >
+                <Mic size={14} />
+              </button>
+              {isStreaming && (
+                <button
+                  type="button"
+                  className="chat-stop-button"
+                  onClick={handleStop}
+                  title="Stop generation"
+                >
+                  <Square size={12} fill="currentColor" />
+                  <span>Stop</span>
+                </button>
+              )}
+              <button
+                type="submit"
+                disabled={sendDisabled}
+                title={isStreaming ? "Thinking..." : "Send prompt"}
+              >
+                {isStreaming ? (
+                  <span className="chat-button__content">
+                    <Loader2 size={16} className="icon-spin" />
+                  </span>
+                ) : (
+                  <span className="chat-button__content">
+                    <SendHorizonal size={16} />
+                  </span>
+                )}
+              </button>
+            </div>
+          </div>
         </form>
         {chatError && <p className="chat-error">{chatError}</p>}
       </div>
+
+      <ModelSelectorModal
+        open={modelModalOpen}
+        onClose={() => setModelModalOpen(false)}
+        models={modelOptions}
+        selectedModel={model}
+        onSelectModel={setModel}
+        onRefresh={refreshModels}
+        loading={loadingModels}
+        ollamaOnline={ollamaOnline}
+        ollamaHost={settings.ollamaHost}
+      />
     </section>
   );
 };

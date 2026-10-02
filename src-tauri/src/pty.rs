@@ -16,6 +16,7 @@ pub static PTY_REGISTRY: Lazy<PtyRegistry> = Lazy::new(PtyRegistry::default);
 #[derive(Default)]
 pub struct PtyRegistry {
     sessions: Mutex<HashMap<String, PtySession>>,
+    last_active: Mutex<Option<String>>,
 }
 
 impl PtyRegistry {
@@ -28,6 +29,9 @@ impl PtyRegistry {
     ) -> Result<String> {
         let session = PtySession::spawn(size, shell, cwd)?;
         let id = session.id.clone();
+        if let Ok(mut last) = self.last_active.lock() {
+            *last = Some(id.clone());
+        }
         self.sessions
             .lock()
             .expect("registry mutex poisoned")
@@ -40,12 +44,20 @@ impl PtyRegistry {
             .lock()
             .expect("registry mutex poisoned")
             .remove(id);
+        if let Ok(mut last) = self.last_active.lock() {
+            if last.as_deref() == Some(id) {
+                *last = None;
+            }
+        }
     }
 
     pub fn with_session<F, R>(&self, id: &str, f: F) -> Result<R>
     where
         F: FnOnce(&mut PtySession) -> Result<R>,
     {
+        if let Ok(mut last) = self.last_active.lock() {
+            *last = Some(id.to_string());
+        }
         let mut sessions = self.sessions.lock().expect("registry mutex poisoned");
         let session = sessions
             .get_mut(id)
@@ -59,6 +71,33 @@ impl PtyRegistry {
                 .take_reader()
                 .with_context(|| format!("PTY reader for session {id} already taken"))
         })
+    }
+
+    pub fn get_session_cwd(&self, id: Option<&str>) -> Option<String> {
+        let sessions = self.sessions.lock().ok()?;
+        let clean_id = id.filter(|s| !s.trim().is_empty());
+
+        let session = clean_id
+            .and_then(|i| sessions.get(i))
+            .or_else(|| {
+                let last = self.last_active.lock().ok()?;
+                let last_id = last.as_deref()?;
+                sessions.get(last_id)
+            })
+            .or_else(|| sessions.values().next())?;
+
+        let pid = session.child.process_id()?;
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(link) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
+                return link.to_str().map(String::from);
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = pid;
+        }
+        None
     }
 }
 
@@ -247,5 +286,25 @@ mod tests {
         registry.remove_session(&id);
         registry.remove_session(&second);
         assert!(registry.with_session(&id, |_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn test_get_session_cwd() {
+        let registry = PtyRegistry::default();
+        let id = registry
+            .create_session(PtySize::default(), Some("/bin/sh"), Some("/tmp"))
+            .expect("should spawn a shell session");
+        let cwd = registry.get_session_cwd(Some(&id));
+        println!("test_get_session_cwd with id: {:?}", cwd);
+        assert!(cwd.is_some());
+        assert_eq!(cwd.unwrap(), "/tmp");
+
+        // Test fallback when id is None
+        let cwd_fallback = registry.get_session_cwd(None);
+        println!("test_get_session_cwd fallback: {:?}", cwd_fallback);
+        assert!(cwd_fallback.is_some());
+        assert_eq!(cwd_fallback.unwrap(), "/tmp");
+
+        registry.remove_session(&id);
     }
 }

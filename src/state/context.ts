@@ -33,7 +33,9 @@ export async function gatherActiveContext(
 
   if (chips.gitStatus) {
     try {
-      const git = await invoke<string>("get_git_status");
+      const git = await invoke<string>("get_git_status", {
+        session_id: sessionId,
+      });
       if (git.trim()) {
         sections.push(`[Workspace: Git Status / Diff]\n${git.trim()}`);
       }
@@ -45,6 +47,7 @@ export async function gatherActiveContext(
   if (chips.cwdTree) {
     try {
       const tree = await invoke<string>("get_workspace_tree", {
+        session_id: sessionId,
         max_depth: 2,
       });
       if (tree.trim()) {
