@@ -288,6 +288,9 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
   const [ollamaOnline, setOllamaOnline] = useState<boolean | null>(null);
   const [checkingOllama, setCheckingOllama] = useState(false);
   const [modelModalOpen, setModelModalOpen] = useState(false);
+  const [modelModalNotice, setModelModalNotice] = useState<string | null>(null);
+  // Prompt queued by Explain while no model was selected; sent once one is picked.
+  const pendingPromptRef = useRef<string | null>(null);
   const responseIdRef = useRef<string | null>(null);
   const responseBufferRef = useRef<string>("");
   const promptStartTimeRef = useRef<number>(0);
@@ -632,7 +635,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
     bottomRef.current?.scrollIntoView({ behavior: isStreaming ? "auto" : "smooth" });
   }, [messages, isStreaming]);
 
-  const sendPrompt = useCallback(async (customPrompt?: string) => {
+  const sendPrompt = useCallback(async (customPrompt?: string, modelOverride?: string) => {
     const rawPrompt = typeof customPrompt === "string" ? customPrompt : input;
     const trimmed = rawPrompt.trim();
     if (!trimmed || isStreaming) {
@@ -647,7 +650,9 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
       return;
     }
 
-    if (!model) {
+    const activeModel = modelOverride || model;
+
+    if (!activeModel) {
       setChatError("No local Ollama models are available yet.");
       if (!checkingOllama) {
         refreshModels().catch((error) => console.error(error));
@@ -671,7 +676,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
       role: "assistant",
       content: "",
       pending: true,
-      model,
+      model: activeModel,
       timestamp,
     };
 
@@ -717,7 +722,7 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
 
     const requestPayload: Record<string, unknown> = {
       prompt: trimmed,
-      model,
+      model: activeModel,
       host: settings.ollamaHost,
       history: previousHistory,
     };
@@ -804,13 +809,28 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
   }, []);
 
   useEffect(() => {
-    const handleAskAssistant = async (event: Event) => {
+    const handleAskAssistant = (event: Event) => {
       const custom = event as CustomEvent<{ prompt: string; autoSend?: boolean }>;
       const promptText = custom.detail?.prompt?.trim();
       if (!promptText) return;
 
       // Always populate the input field so user sees the prompt immediately
       setInput(promptText);
+
+      const currentModel = modelRef.current;
+      if (custom.detail?.autoSend !== false && (!currentModel || ollamaOnline === false)) {
+        // No AI selected (or Ollama unreachable): ask the user to pick a model,
+        // then send the queued prompt as soon as they do.
+        pendingPromptRef.current = promptText;
+        setModelModalNotice(
+          "Select a local model to analyze your terminal output. Your request will be sent as soon as you pick one.",
+        );
+        setModelModalOpen(true);
+        if (!checkingOllama) {
+          refreshHealth().catch((error) => console.error(error));
+        }
+        return;
+      }
 
       // Auto-focus the chat input textarea
       setTimeout(() => {
@@ -819,31 +839,34 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
       }, 50);
 
       if (custom.detail?.autoSend !== false) {
-        // If no model is selected yet, try to select one from modelOptions or fetch models
-        let targetModel = modelRef.current;
-        if (!targetModel && modelOptions.length > 0) {
-          targetModel = modelOptions[0];
-          setModel(targetModel);
-        } else if (!targetModel) {
-          try {
-            const models = await invoke<string[]>("list_ollama_models");
-            if (models.length > 0) {
-              setModelOptions(models);
-              setModel(models[0]);
-              targetModel = models[0];
-            }
-          } catch {
-            // Error will be surfaced in sendPrompt
-          }
-        }
-        void sendPrompt(promptText);
+        void sendPrompt(promptText, currentModel);
       }
     };
     window.addEventListener("termalime:ask-assistant", handleAskAssistant);
     return () => {
       window.removeEventListener("termalime:ask-assistant", handleAskAssistant);
     };
-  }, [modelOptions, sendPrompt]);
+  }, [checkingOllama, ollamaOnline, refreshHealth, sendPrompt]);
+
+  const handleSelectModel = useCallback(
+    (selected: string) => {
+      setModel(selected);
+      const pending = pendingPromptRef.current;
+      pendingPromptRef.current = null;
+      setModelModalNotice(null);
+      if (pending) {
+        void sendPrompt(pending, selected);
+      }
+    },
+    [sendPrompt],
+  );
+
+  const handleCloseModelModal = useCallback(() => {
+    setModelModalOpen(false);
+    // Dismissed without choosing: drop the queued request (it stays in the input box).
+    pendingPromptRef.current = null;
+    setModelModalNotice(null);
+  }, []);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -1001,14 +1024,15 @@ const Chatbot = ({ sessionId }: ChatbotProps) => {
 
       <ModelSelectorModal
         open={modelModalOpen}
-        onClose={() => setModelModalOpen(false)}
+        onClose={handleCloseModelModal}
         models={modelOptions}
         selectedModel={model}
-        onSelectModel={setModel}
+        onSelectModel={handleSelectModel}
         onRefresh={refreshModels}
         loading={loadingModels}
         ollamaOnline={ollamaOnline}
         ollamaHost={settings.ollamaHost}
+        notice={modelModalNotice}
       />
     </section>
   );

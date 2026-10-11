@@ -457,7 +457,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     <div className="settings-card__header">
                       <div>
                         <h4 className="settings-card__title">
-                          <Type size={16} style={{ color: "var(--matrix-neon)" }} />
+                          <Type size={16} className="settings-icon" />
                           Typography &amp; Scaling
                         </h4>
                         <p className="settings-card__desc">
@@ -529,7 +529,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     <div className="settings-card__header">
                       <div>
                         <h4 className="settings-card__title">
-                          <Terminal size={16} style={{ color: "var(--matrix-neon)" }} />
+                          <Terminal size={16} className="settings-icon" />
                           Cursor &amp; Interaction
                         </h4>
                         <p className="settings-card__desc">
@@ -587,7 +587,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     <div className="settings-card__header">
                       <div>
                         <h4 className="settings-card__title">
-                          <Sliders size={16} style={{ color: "var(--matrix-neon)" }} />
+                          <Sliders size={16} className="settings-icon" />
                           Buffer &amp; History
                         </h4>
                         <p className="settings-card__desc">
@@ -629,7 +629,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     <div className="settings-card__header">
                       <div>
                         <h4 className="settings-card__title">
-                          <Sparkles size={16} style={{ color: "var(--matrix-neon)" }} />
+                          <Sparkles size={16} className="settings-icon" />
                           Workspace Layout
                         </h4>
                         <p className="settings-card__desc">
@@ -656,7 +656,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     <div className="settings-card__header">
                       <div>
                         <h4 className="settings-card__title">
-                          <Network size={16} style={{ color: "var(--matrix-neon)" }} />
+                          <Network size={16} className="settings-icon" />
                           Local Ollama Gateway
                         </h4>
                         <p className="settings-card__desc">
@@ -674,10 +674,10 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       />
                       <button
                         type="button"
-                        className="text-btn"
+                        className="settings-btn"
                         onClick={testHostConnection}
                         disabled={testingHost}
-                        style={{ padding: "0.45rem 0.85rem", whiteSpace: "nowrap" }}
+                        style={{ whiteSpace: "nowrap" }}
                       >
                         {testingHost ? "Testing…" : "Test connection"}
                       </button>
@@ -820,17 +820,19 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           <div key={preset.id} className="mcp-preset-card">
                             <div className="mcp-preset-card__top">
                               <div className="mcp-preset-card__name">
-                                <Icon size={15} style={{ color: "var(--matrix-neon)" }} />
+                                <Icon size={15} className="settings-icon" />
                                 <span>{preset.name}</span>
                               </div>
                             </div>
                             <p className="mcp-preset-card__desc">{preset.desc}</p>
                             <button
                               type="button"
-                              className="mcp-preset-card__btn"
+                              className={clsx(
+                                "mcp-preset-card__btn",
+                                isInstalled && "mcp-preset-card__btn--installed"
+                              )}
                               disabled={isInstalled || busyServerId === preset.id}
                               onClick={() => installPreset(preset)}
-                              style={isInstalled ? { opacity: 0.65, cursor: "default" } : {}}
                             >
                               {isInstalled ? (
                                 <>
@@ -854,7 +856,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     <div className="settings-card__header">
                       <div>
                         <h4 className="settings-card__title">
-                          <Server size={16} style={{ color: "var(--matrix-neon)" }} />
+                          <Server size={16} className="settings-icon" />
                           Configured Servers ({mcpServers.length})
                         </h4>
                         <p className="settings-card__desc">
@@ -926,7 +928,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                                       {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                                     </button>
                                   </div>
-                                  <code style={{ fontSize: "0.7rem", color: isNative ? "var(--matrix-neon)" : "rgba(255,255,255,0.5)" }}>
+                                  <code style={{ fontSize: "0.7rem", color: "var(--ui-text-subtle)" }}>
                                     {isNative
                                       ? "In-process zero-latency • Zero dependencies • Linux/Unix native"
                                       : `${srv.command} ${srv.args.join(" ")}`}
@@ -1088,16 +1090,15 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", marginTop: "0.25rem" }}>
                           <button
                             type="button"
-                            className="text-btn"
+                            className="settings-btn settings-btn--ghost"
                             onClick={() => setShowAddServer(false)}
                           >
                             Cancel
                           </button>
                           <button
                             type="button"
-                            className="text-btn"
+                            className="settings-btn settings-btn--primary"
                             onClick={handleAddServer}
-                            style={{ color: "var(--matrix-neon)", fontWeight: 600 }}
                           >
                             Save &amp; Start
                           </button>
@@ -1142,7 +1143,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       This session: {formatCo2(session.co2G)} CO₂, {formatWater(session.waterMl)} water
                       across {session.requests} requests.
                     </p>
-                    <button className="text-btn" onClick={resetLifetime} style={{ alignSelf: "flex-start" }}>
+                    <button className="settings-btn" onClick={resetLifetime} style={{ alignSelf: "flex-start" }}>
                       Reset eco totals
                     </button>
                   </section>
@@ -1152,7 +1153,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       <p>Factory reset</p>
                       <span>Reset all settings, prompt templates, and options to default values.</span>
                     </div>
-                    <button className="text-btn" onClick={resetSettings} style={{ color: "#f87171", alignSelf: "flex-start" }}>
+                    <button className="settings-btn settings-btn--danger" onClick={resetSettings} style={{ alignSelf: "flex-start" }}>
                       Reset all settings to defaults
                     </button>
                   </section>
@@ -1162,7 +1163,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
             <footer className="settings-panel__footer">
               <span className="settings-panel__hint">Changes save instantly.</span>
-              <button className="text-btn" onClick={onClose} style={{ color: "var(--matrix-neon)", fontWeight: 600 }}>
+              <button className="settings-btn settings-btn--primary" onClick={onClose}>
                 Done
               </button>
             </footer>
@@ -1189,7 +1190,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           >
             <div className="mcp-log-modal-header">
               <div className="mcp-log-modal-title-wrap">
-                <Terminal size={17} style={{ color: "var(--matrix-neon)" }} />
+                <Terminal size={17} className="settings-icon" />
                 <div>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <h3>Server Diagnostics</h3>

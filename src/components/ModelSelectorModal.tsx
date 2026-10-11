@@ -8,6 +8,7 @@ import {
   Loader2,
   RefreshCcw,
   Search,
+  Sparkles,
   Terminal,
   X,
 } from "lucide-react";
@@ -23,6 +24,8 @@ interface ModelSelectorModalProps {
   loading: boolean;
   ollamaOnline: boolean | null;
   ollamaHost?: string;
+  /** Optional explanation shown above the list, e.g. why the picker was opened. */
+  notice?: string | null;
 }
 
 export function ModelSelectorModal({
@@ -35,6 +38,7 @@ export function ModelSelectorModal({
   loading,
   ollamaOnline,
   ollamaHost = "http://127.0.0.1:11434",
+  notice,
 }: ModelSelectorModalProps) {
   const [search, setSearch] = useState("");
 
@@ -92,6 +96,16 @@ export function ModelSelectorModal({
                 </button>
               </div>
             </header>
+
+            {notice && (
+              <div className="model-modal__callout" role="status">
+                <Sparkles size={15} className="model-modal__callout-icon" />
+                <div>
+                  <p>No AI model selected</p>
+                  <span>{notice}</span>
+                </div>
+              </div>
+            )}
 
             <div className="model-modal__search-wrap">
               <Search size={14} className="model-modal__search-icon" />
